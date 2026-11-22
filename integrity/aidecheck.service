@@ -27,4 +27,6 @@ TimeoutStartSec=15min
 # home; reads everything in the scope, writes /var/lib/aide, /var/log/aide and
 # /var/lib/harden-check only.
 IPAddressDeny=any
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_AUDIT_CONTROL
+# CAP_SYS_ADMIN: the kernel asks for it to read net.core.bpf_jit_harden at all (bpf-jit
+# check, host 2026-11-22: "Operation not permitted"); aide stays confined by aide_t
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_AUDIT_CONTROL CAP_SYS_ADMIN

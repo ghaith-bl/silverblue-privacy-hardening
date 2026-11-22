@@ -71,7 +71,7 @@ SAFE = re.compile(r"[^\x20-\x7e]")
 # show as a change (tests/test_integrity.py: same as integrity/aidecheck.service)
 UNIT_PROPS = ("IPAddressDeny=any", "UMask=0077",
               "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER "
-              "CAP_CHOWN CAP_AUDIT_CONTROL")
+              "CAP_CHOWN CAP_AUDIT_CONTROL CAP_SYS_ADMIN")
 
 
 def clean(s: str) -> str:

@@ -261,7 +261,10 @@
   still hashed (host 2026-11-22). Local module `harden_aide_efi`: that one permission.
 - `PrivateNetwork=yes` = a new network namespace: `net.core.bpf_jit_harden` (and the
   other `net.core.bpf_*` sysctls) exist only in the first namespace, the root check read
-  "No such file". `IPAddressDeny=any` blocks IP without a namespace.
+  "No such file". `IPAddressDeny=any` blocks IP without a namespace. Then "Operation not
+  permitted": the kernel's handler for `net.core.bpf_jit_harden` (and `bpf_jit_kallsyms`,
+  `bpf_jit_limit`) wants CAP_SYS_ADMIN even to read (the file is 0600, sectop cannot read
+  it either): the unit's capability set has it (decision 2026-11-22), aide stays in aide_t.
 
 ## Audio
 
