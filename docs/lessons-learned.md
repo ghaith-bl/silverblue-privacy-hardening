@@ -230,7 +230,11 @@
   since 2026-11-21), so a fixed rule count in a checker breaks. Since 2026-11-22
   `audit-privileged-sync.service` writes the list at every boot, before
   `audit-rules.service` loads rules.d (audit 4: rules load there, not in auditd.service):
-  /usr only changes with a new deployment, so boot is the moment. sectop compares the `privileged` rules with the programs it finds
+  /usr only changes with a new deployment, so boot is the moment. First version had
+  `ProtectSystem=strict` + `ReadWritePaths=/etc/audit/rules.d`: SELinux refuses PID 1 the
+  bind mount on that folder (auditd_etc_t, mounton), the unit failed 226/NAMESPACE at boot;
+  the old list stayed and loaded, sectop showed the failed unit. A path in ReadWritePaths= /
+  ReadOnlyPaths= must be a type PID 1 may mount on. sectop compares the `privileged` rules with the programs it finds
   (posture `audit-rules`, `setuid_rules = 2`).
 
 ## Audio

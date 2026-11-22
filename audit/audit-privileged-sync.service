@@ -16,9 +16,9 @@ ConditionKernelCommandLine=!audit=off
 Type=oneshot
 ExecStart=/usr/local/sbin/audit-privileged-sync
 TimeoutStartSec=90
-# reads /usr, writes rules.d only
-ProtectSystem=strict
-ReadWritePaths=/etc/audit/rules.d
+# No ProtectSystem=strict + ReadWritePaths=/etc/audit/rules.d: SELinux refuses PID 1 the
+# bind mount on auditd_etc_t (mounton), the unit fails 226/NAMESPACE (host 2026-11-22).
+# The script is root-owned, takes no input and writes rules.d only.
 ProtectHome=yes
 PrivateNetwork=yes
 NoNewPrivileges=yes

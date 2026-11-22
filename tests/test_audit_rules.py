@@ -262,6 +262,14 @@ class PrivilegedSync(unittest.TestCase):
     def test_arguments(self):
         self.assertEqual(self.run_sync('--bogus').returncode, 2)
 
+    def test_unit_no_bind_mount_on_rules_d(self):
+        # host 2026-11-22: ReadWritePaths=/etc/audit/rules.d -> SELinux denies the bind mount
+        # (mounton auditd_etc_t), 226/NAMESPACE; the old list stayed (as designed)
+        with open(SYNC + '.service') as f:
+            unit = [ln for ln in f.read().splitlines() if ln and not ln.startswith('#')]
+        self.assertFalse([ln for ln in unit if ln.startswith(('ReadWritePaths=', 'ProtectSystem='))])
+        self.assertIn('Before=audit-rules.service', unit)
+
 
 if __name__ == '__main__':
     unittest.main()
