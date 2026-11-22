@@ -5,12 +5,13 @@ OpenSCAP, both ways: the plain profile and the profile tailored to this setup.
 - Content: scap-security-guide 0.1.82, `ssg-fedora-ds.xml`, profile `cis_workstation_l2`
   (DRAFT, based on the CIS Fedora community branch). Scanner: openscap 1.4.6.
 - `tailoring.xml`: the profile without my deviations (unselected) and with my values where
-  the profile has a variable for them (`set-value`). Reason and review date of every entry:
-  [docs/deviations.md](../docs/deviations.md), column Tailoring; `tests/test_tailoring.py`
-  checks both files against each other. Backlog rules stay in: they fail until fixed.
-- Results: both counts, failing ids by kind, no host data: `scan-summary.md` (after each
-  scan). Reports stay on the host (`.gitignore`: `scap-*`): they hold host names,
-  addresses, package lists.
+  the profile has a variable for them (`set-value`). Reason of every entry and when it is
+  reviewed: [docs/deviations.md](../docs/deviations.md), column Tailoring;
+  `tests/test_tailoring.py` checks both files against each other. Backlog rules stay in:
+  they fail until fixed.
+- Results: both counts, failing ids by kind, no host data:
+  [scan-summary.md](scan-summary.md) (after each scan). Reports stay on the host
+  (`.gitignore`: `scap-*`): they hold host names, addresses, package lists.
 
 ## Scan
 
@@ -34,4 +35,4 @@ Never `--remediate` (server-oriented fixes break a desktop).
 Edit the row in `docs/deviations.md` and the entry in `tailoring.xml` in the same commit,
 then `python3 -I -B -m unittest discover -s tests -p test_tailoring.py`. A new
 scap-security-guide version: `python3 -I tools/check-tailoring.py` (every unselected rule
-and every variable still in the profile), then scan again; the review date covers the rest.
+and every variable still in the profile), then scan again (that is the review of every row).

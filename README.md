@@ -21,30 +21,27 @@ whose default posture checks and watch list are this repo's baseline.
 
 ## Result (OpenSCAP, profile `cis_workstation_l2`)
 
-| Result         | Before | 2026-10 | 2026-11-09 |
-|----------------|-------:|--------:|-----------:|
-| fail           |    227 |     115 |         96 |
-| pass           |    172 |     284 |        303 |
-| not applicable |     34 |      34 |         34 |
+| Result         | Before | 2026-10 | 2026-11-09 | 2026-11-22 | 2026-11-22 tailored |
+|----------------|-------:|--------:|-----------:|-----------:|--------------------:|
+| fail           |    227 |     115 |         96 |         83 |                   8 |
+| pass           |    172 |     284 |        303 |        316 |                 324 |
+| not applicable |     34 |      34 |         34 |         34 |                  34 |
 
-The 96 fails (scan 2026-11-09, openscap 1.4.6, scap-security-guide 0.1.82), each one
-checked by hand:
+The 83 fails (scan 2026-11-22, openscap 1.4.6, scap-security-guide 0.1.82), each one
+checked by hand; ids, the change since the last scan and the tailored counts:
+[compliance/scan-summary.md](compliance/scan-summary.md).
 
 | Count | Kind | Where |
 |------:|------|-------|
 | 56 | deviations on purpose: would break the machine, not useful on a personal device, two accounts, values changed on purpose, Fedora's own PAM profile | [docs/deviations.md](docs/deviations.md) |
-| 12 | scanner false positives on Silverblue / Fedora (checks the wrong file or a Debian path, syscalls missing on x86_64, sshd masked) | [docs/deviations.md](docs/deviations.md) |
-| 16 | audit rules loaded, written in another format than the scanner matches | [docs/deviations.md](docs/deviations.md) |
+| 15 | scanner false positives on Silverblue / Fedora (checks the wrong file or a Debian path, syscalls missing on x86_64, wants a value in every sshd drop-in, audit rules broader than the check) | [docs/deviations.md](docs/deviations.md) |
 | 8  | backlog: AIDE (4), CIS crypto-policy module, umask (3) | - |
 | 4  | rootless container storage in the daily user's home (kind lab): subuid owners, the container's own modes | [docs/deviations.md](docs/deviations.md) |
 
-Since that scan (2026-11-21): the audit rules are written in the text the scanner matches
-(the same rules; 12 of the 16 pass that way, `privileged_commands` depends on what the
-scanner counts, 3 stay broader on purpose), and the copies written only for the scanner
-are gone (one place per setting): those fails are false positives in
-[docs/deviations.md](docs/deviations.md). New numbers with the next scan, plain and with
-[compliance/tailoring.xml](compliance/tailoring.xml) (the deviations unselected or set to my
-values, each with its row; how to scan: [compliance/README.md](compliance/README.md)).
+Tailored: [compliance/tailoring.xml](compliance/tailoring.xml) unselects the deviations and
+sets my values where the profile has a variable (every entry with its row in
+docs/deviations.md); only the 8 backlog rules fail. How to scan:
+[compliance/README.md](compliance/README.md).
 
 Reports stay on the host, never in git (`.gitignore`: `scap-*`).
 

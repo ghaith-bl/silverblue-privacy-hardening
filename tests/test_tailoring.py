@@ -1,6 +1,6 @@
 #
 # tests for compliance/tailoring.xml (stdlib, no scanner): every entry has a row in
-# docs/deviations.md (reason, review date at the top of that file), every row's Tailoring
+# docs/deviations.md (reason; review line at the top of that file), every row's Tailoring
 # column matches the file, both ways (review 2026-11-17, C-1).
 #
 #   python3 -I -B -m unittest discover -s tests -v
@@ -130,10 +130,10 @@ class TailoringFile(unittest.TestCase):
         _, unselected, values = read_tailoring()
         self.assertEqual(check(unselected, values, read_rows()), [])
 
-    def test_review_date(self):
+    def test_review_line(self):
         with open(DEVIATIONS, encoding='ascii') as f:
             text = f.read()
-        self.assertRegex(text, r'\nReview: every row by \d{4}-\d{2}-\d{2}')
+        self.assertRegex(text, r'\nReview: every row at the Fedora \d+ upgrade, then after every')
 
     def test_ascii(self):
         with open(TAILORING, 'rb') as f:

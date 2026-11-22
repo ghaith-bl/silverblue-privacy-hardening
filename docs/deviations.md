@@ -5,8 +5,8 @@ Column `Tailoring`: what [compliance/tailoring.xml](../compliance/tailoring.xml)
 rule: `unselect` (not scanned), `value <variable>=<value>` (scanned with my value instead of
 the profile's), `-` (scanned as in the profile). `tests/test_tailoring.py` checks both ways:
 every row against the file, every entry of the file against a row.
-Review: every row by 2027-05-22, earlier after a Fedora major upgrade or a new
-scap-security-guide version (both change what the scanner reads).
+Review: every row at the Fedora 45 upgrade, then after every Fedora major upgrade and every
+new scap-security-guide version (both change what the scanner reads and what it finds).
 
 ## Would break this machine
 
@@ -26,7 +26,6 @@ scap-security-guide version (both change what the scanner reads).
 |------|----------|--------|-----------|
 | `accounts_tmout` | skip | GNOME idle lock (15 min, locked) covers it | unselect |
 | `banner_etc_issue_cis`, `banner_etc_issue_net_cis`, `dconf_gnome_banner_enabled`, `dconf_gnome_login_banner_text`, `sshd_enable_warning_banner_net` | skip | legal banners - value in organisations, not on a personal device | unselect |
-| `sshd_limit_user_access` | skip while the SSH server is masked | `SSH_SERVER=off` (default): nobody logs in over SSH, so an `AllowUsers` / `AllowGroups` list would guard nothing. An allow list is planned for `SSH_SERVER=on` | unselect |
 | `package_systemd-journal-remote_installed` | skip | needs a log server on a second device; none now | unselect |
 | `accounts_passwords_pam_faillock_even_deny_root_or_root_unlock_time` | skip | root account is locked; `su` restricted to an empty group | unselect |
 | `ensure_root_password_configured` | skip | root is locked; emergency shell refuses access instead of opening unauthenticated | unselect |
@@ -68,7 +67,7 @@ compromise: change the password at once (`sudo passwd <user>` works the same day
 | `audit_rules_dac_modification_*` (14), `audit_rules_file_deletion_events_*` (5), `audit_rules_unsuccessful_file_modification_*` (5) | off by default | thousands of events/hour from Steam and Brave caches; `ENABLE_NOISY_AUDIT=yes` to apply | unselect |
 | `audit_rules_time_clock_settime` | `subj_type!=chronyd_t` filter | chronyd adjusts the clock constantly | unselect |
 | `accounts_password_pam_modules_in_authselect_profile` | keep Fedora's authselect profile `local` | the rule wants a custom profile copied from `local`; the PAM lines would be the same (faillock, pwhistory, pwquality: features of `local`, set by the `pam` section). A copy gets no fixes from Fedora's updates of `local`, and a broken custom profile can lock out the only sudo account (root is locked). Decision 2026-11-09 | unselect |
-| `sshd_set_keepalive` | `ClientAliveCountMax 3` (`sshd` section, server masked) | with `ClientAliveInterval 15`: a dead client is dropped after about 45 s; the profile value `1` drops it after one missed reply | value `var_sshd_set_keepalive=3` |
+| `sshd_set_keepalive`, `sshd_set_idle_timeout` (also reads the count) | `ClientAliveCountMax 3` (`sshd` section, server masked) | with `ClientAliveInterval 15`: a dead client is dropped after about 45 s; the profile value `1` drops it after one missed reply | value `var_sshd_set_keepalive=3` |
 
 ## Scanner false positives on Silverblue (verified manually)
 

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Tailoring of scap-security-guide 0.1.82, profile cis_workstation_l2 (Fedora).
-     Every entry has a row in docs/deviations.md (reason; review date at its top),
+     Every entry has a row in docs/deviations.md (reason; review line at its top),
      checked by tests/test_tailoring.py. How to scan with it: compliance/README.md -->
 <xccdf-1.2:Tailoring xmlns:xccdf-1.2="http://checklists.nist.gov/xccdf/1.2" id="xccdf_local_tailoring_silverblue-privacy-hardening">
   <xccdf-1.2:benchmark href="ssg-fedora-ds.xml"/>
@@ -26,7 +26,6 @@
     <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_dconf_gnome_banner_enabled" selected="false"/>
     <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_dconf_gnome_login_banner_text" selected="false"/>
     <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sshd_enable_warning_banner_net" selected="false"/>
-    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sshd_limit_user_access" selected="false"/>
     <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_package_systemd-journal-remote_installed" selected="false"/>
     <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_accounts_passwords_pam_faillock_even_deny_root_or_root_unlock_time" selected="false"/>
     <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_ensure_root_password_configured" selected="false"/>
