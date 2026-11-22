@@ -1,0 +1,607 @@
+#!/usr/bin/python3 -IB
+"""harden-check - root drift check (review 2026-11-17, D-U1; scope 2026-11-22).
+
+Installed root-owned in /usr/local/sbin by harden-workstation.sh integrity. Never fixes.
+
+  harden-check            the checks below -> RESULT (aidecheck.service, after aide --check)
+  harden-check --init     first AIDE database (the section, when there is none)
+  harden-check --accept   admin, text console: aide --update, shows every change, y = the
+                          new database is the baseline (only the admin accepts: the daily
+                          user can never take a change in by itself)
+
+Checks: aide (files changed since the last accept, grouped: from an OS update / other),
+boot-image (kernel + initramfs in /boot = the copy in the image: the initramfs is not
+covered by Secure Boot), sudoers, auditd-conf, audit-loaded, accounts, firewalld-conf,
+bpf-jit, applied. RESULT is read by sectop (posture row harden-check): root-owned,
+group sectop, one line per check, then its items. No names of accounts in it.
+"""
+
+import datetime
+import filecmp
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+os.environ["PATH"] = "/usr/bin:/usr/sbin"
+os.environ["LC_ALL"] = "C"
+
+STATE = "/var/lib/harden-check"
+RESULT = STATE + "/result"
+ACCEPTED = STATE + "/accepted"
+AIDE = "/usr/sbin/aide"
+AIDE_CONF = "/etc/aide.conf"
+AIDE_DB = "/var/lib/aide/aide.db.gz"
+AIDE_NEW = "/var/lib/aide/aide.db.new.gz"
+AIDE_JSON = "/var/log/aide/aide.json"
+APPLIED = "/etc/harden-workstation/applied"
+SUDOERS = "/etc/sudoers"
+SUDOERS_D = "/etc/sudoers.d"
+AUDITD_CONF = "/etc/audit/auditd.conf"
+RULES_D = "/etc/audit/rules.d"
+SHADOW = "/etc/shadow"
+PASSWD_DB = "/etc/passwd"
+FIREWALLD_CONF = "/etc/firewalld/firewalld.conf"
+BPF_JIT = "/proc/sys/net/core/bpf_jit_harden"
+CMDLINE = "/proc/cmdline"
+BOOT = "/boot"
+OSTREE_REPO = "/ostree/repo"
+GROUP = "sectop"                 # reads RESULT (posture)
+FRESH = 2 * 3600                 # aide.json older than this: aide did not report this run
+MAX_ITEMS = 200                  # item lines per check in RESULT
+# same values as sec_auditd in harden-workstation.sh (tests/test_integrity.py compares)
+AUDITD_WANT = {"disk_error_action": "SYSLOG", "space_left_action": "SYSLOG",
+               "admin_space_left_action": "SUSPEND", "disk_full_action": "SUSPEND",
+               "max_log_file_action": "ROTATE", "max_log_file": "32", "num_logs": "40"}
+DEFAULT_ZONE = "drop"
+BPF_JIT_WANT = "2"
+# written again by every new deployment (inputs from the image): an update explains them
+GENERATED = ("/etc/ld.so.cache", "/etc/udev/hwdb.bin", "/etc/.updated",
+             "/etc/selinux/targeted/")
+UPDATE_TREES = ("/boot/ostree/", "/boot/loader")
+AUDIT_TOOLS = ("/usr/sbin/auditctl", "/usr/sbin/auditd", "/usr/sbin/ausearch",
+               "/usr/sbin/aureport", "/usr/sbin/audispd", "/usr/sbin/augenrules")
+SAFE = re.compile(r"[^\x20-\x7e]")
+# --init / --accept run aide the way aidecheck.service does (same SELinux domain change,
+# capabilities, umask, no network): a file one run can read and the other cannot would
+# show as a change (tests/test_integrity.py: same as integrity/aidecheck.service)
+UNIT_PROPS = ("PrivateNetwork=yes", "UMask=0077",
+              "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER "
+              "CAP_CHOWN CAP_AUDIT_CONTROL")
+
+
+def clean(s: str) -> str:
+    """One printable ASCII line (paths, command output)."""
+    return SAFE.sub("?", str(s).replace("\t", " "))[:300]
+
+
+class Check:
+    def __init__(self, cid: str):
+        self.id, self.status, self.summary, self.items = cid, "unknown", "", []
+
+    def set(self, status: str, summary: str):
+        self.status, self.summary = status, summary
+        return self
+
+    def item(self, text: str):
+        self.items.append(clean(text))
+
+
+def run(argv: list, timeout: int = 120) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                          errors="replace", stdin=subprocess.DEVNULL)
+
+
+def read(path: str) -> str:
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+# --- deployments ------------------------------------------------------------------------
+
+def booted_deployment(cmdline: str = None) -> tuple:
+    """(commit checksum of the booted deployment, boot checksum) from ostree= on the
+    kernel command line: /ostree/boot.N/<os>/<bootcsum>/<serial> -> the deployment
+    folder <commit>.<serial>. ("", "") if not an ostree boot."""
+    cmdline = read(CMDLINE) if cmdline is None else cmdline
+    m = re.search(r"(?:^|\s)ostree=(\S+)", cmdline)
+    if not m:
+        return "", ""
+    parts = m.group(1).strip("/").split("/")
+    bootcsum = parts[3] if len(parts) >= 5 else ""
+    target = os.path.basename(os.path.realpath(m.group(1)))
+    return target.split(".")[0], bootcsum
+
+
+def read_accepted() -> tuple:
+    """(deployment commit, time text) of the last accept; ("", "") if none."""
+    try:
+        f = read(ACCEPTED).split()
+    except OSError:
+        return "", ""
+    return (f[0], " ".join(f[1:])) if f else ("", "")
+
+
+def usr_etc_changes(old: str, new: str) -> set | None:
+    """/etc paths whose image default (/usr/etc) differs between two commits; None if
+    ostree cannot tell (an old commit pruned)."""
+    if not old or not new or old == new:
+        return set()
+    try:
+        r = run(["ostree", "diff", "--repo=" + OSTREE_REPO, old, new], timeout=300)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    out = set()
+    for line in r.stdout.splitlines():
+        f = line.split(None, 1)
+        if len(f) == 2 and f[1].startswith("/usr/etc/"):
+            out.add("/etc/" + f[1][len("/usr/etc/"):])
+    return out
+
+
+# --- aide -------------------------------------------------------------------------------
+
+def aide_entries(report: dict) -> list:
+    """[(kind, path)] from aide's json report: kind + added, - removed, ~ changed.
+    Grouped (default): objects path -> code; ungrouped: lists."""
+    out = []
+    for key, kind in (("added", "+"), ("removed", "-"), ("changed", "~")):
+        v = report.get(key) or {}
+        paths = v.keys() if isinstance(v, dict) else \
+            [x if isinstance(x, str) else (x.get("path") or x.get("name") or "?") for x in v]
+        out += [(kind, p) for p in paths]
+    return sorted(out, key=lambda e: e[1])
+
+
+def update_explained(path: str, etc_changes: set | None) -> bool:
+    if path.startswith(UPDATE_TREES) or path in AUDIT_TOOLS:
+        return True
+    if path in GENERATED or any(path.startswith(g) for g in GENERATED if g.endswith("/")):
+        return True
+    return etc_changes is not None and path in etc_changes
+
+
+def check_aide(now: float, booted: str) -> Check:
+    c = Check("aide")
+    if not os.path.exists(AIDE_DB):
+        return c.set("fail", "no database: sudo ./harden-workstation.sh integrity")
+    try:
+        age = now - os.stat(AIDE_JSON).st_mtime
+        report = json.loads(read(AIDE_JSON))
+    except FileNotFoundError:
+        return c.set("unknown", "no aide report yet")
+    except (OSError, ValueError) as e:
+        return c.set("fail", f"aide report unreadable: {e}")
+    if age > FRESH:
+        return c.set("fail", f"aide did not report this run (report {int(age // 3600)} h old): "
+                             "journalctl -u aidecheck.service")
+    entries = aide_entries(report)
+    acc, acc_time = read_accepted()
+    since = f" since {acc_time}" if acc_time else ""
+    total = (report.get("number_of_entries") or {}).get("total", "?")
+    if not entries:
+        return c.set("pass", f"{total} entries, no change{since}")
+    upd = []
+    if acc and booted and acc != booted:
+        etc = usr_etc_changes(acc, booted)
+        upd = [e for e in entries if update_explained(e[1], etc)]
+        if etc is None:
+            c.item(f"note: ostree diff {acc[:10]}..{booted[:10]} not possible "
+                   "(old commit pruned): /etc changes not grouped")
+    other = [e for e in entries if e not in upd]
+    shown = 0
+    for group, lst in (("other", other), ("update", upd)):
+        for kind, path in lst:
+            if shown < MAX_ITEMS:
+                c.item(f"{group} {kind} {path}")
+                shown += 1
+    if shown < len(entries):
+        c.item(f"... {len(entries) - shown} more: sudo harden-check --accept shows all")
+    return c.set("fail", f"{len(entries)} changed{since}: {len(other)} other, "
+                         f"{len(upd)} from the OS update")
+
+
+# --- boot files = image -----------------------------------------------------------------
+
+def loader_entries(boot: str = BOOT) -> list:
+    """[(entry file, linux, initrd, ostree=)] of the boot loader entries."""
+    out = []
+    for f in sorted(glob.glob(os.path.join(boot, "loader", "entries", "*.conf"))):
+        kv = {}
+        for line in read(f).splitlines():
+            p = line.split(None, 1)
+            if len(p) == 2:
+                kv[p[0]] = p[1].strip()
+        m = re.search(r"(?:^|\s)ostree=(\S+)", kv.get("options", ""))
+        out.append((os.path.basename(f), kv.get("linux", ""), kv.get("initrd", ""),
+                    m.group(1) if m else ""))
+    return out
+
+
+def check_boot_image(boot: str = BOOT) -> Check:
+    """Each loader entry: its kernel and initramfs in /boot = vmlinuz / initramfs.img of
+    its deployment (/usr/lib/modules/<kver>/). The booted one from /usr (composefs,
+    verified); others from their deployment folder if it holds /usr."""
+    c = Check("boot-image")
+    try:
+        entries = loader_entries(boot)
+    except OSError as e:
+        return c.set("unknown", f"{boot}/loader: {e.strerror}")
+    if not entries:
+        return c.set("unknown", "no boot loader entries")
+    target = booted_target()
+    booted_root = os.path.realpath(target) if target else ""
+    same = differ = 0
+    used = set()
+    for name, linux, initrd, ostree in entries:
+        kver = os.path.basename(linux).replace("vmlinuz-", "", 1)
+        root = os.path.realpath(ostree) if ostree else ""
+        usr = "/usr" if root and root == booted_root else os.path.join(root, "usr")
+        mods = os.path.join(usr, "lib", "modules", kver)
+        used.add(os.path.dirname(linux))
+        for bootfile, imgname in ((linux, "vmlinuz"), (initrd, "initramfs.img")):
+            have = os.path.join(boot, bootfile.lstrip("/"))
+            want = os.path.join(mods, imgname)
+            if not os.path.isfile(want):
+                c.item(f"{name}: {imgname} not checked (no {want})")
+                continue
+            try:
+                ok = filecmp.cmp(have, want, shallow=False)
+            except OSError as e:
+                c.item(f"{name}: {have}: {e.strerror}")
+                differ += 1
+                continue
+            if ok:
+                same += 1
+            else:
+                differ += 1
+                c.item(f"{name}: {have} differs from {want}")
+    for d in sorted(glob.glob(os.path.join(boot, "ostree", "*"))):
+        if "/" + os.path.relpath(d, boot) not in used:
+            c.item(f"no loader entry uses {d}")
+    if differ:
+        return c.set("fail", f"{differ} boot files differ from the image")
+    if not same:
+        return c.set("unknown", "nothing compared")
+    extra = [i for i in c.items if i.startswith("no loader entry")]
+    if extra:
+        return c.set("fail", f"{len(extra)} folders in {boot}/ostree without an entry")
+    return c.set("pass", f"{same} files = image ({len(entries)} entries)")
+
+
+def booted_target() -> str:
+    try:
+        m = re.search(r"(?:^|\s)ostree=(\S+)", read(CMDLINE))
+    except OSError:
+        return ""
+    return m.group(1) if m else ""
+
+
+# --- root-only reads --------------------------------------------------------------------
+
+def check_sudoers() -> Check:
+    c = Check("sudoers")
+    files = [SUDOERS] + sorted(glob.glob(os.path.join(SUDOERS_D, "*")))
+    bad = 0
+    for f in files:
+        try:
+            st = os.lstat(f)
+        except OSError as e:
+            c.item(f"{f}: {e.strerror}")
+            bad += 1
+            continue
+        mode = st.st_mode & 0o7777
+        if not os.path.isfile(f) or os.path.islink(f) or st.st_uid or st.st_gid or mode != 0o440:
+            c.item(f"{f}: {oct(mode)[2:]} {st.st_uid}:{st.st_gid} (want 440 0:0, regular)")
+            bad += 1
+    try:
+        r = run(["visudo", "-c", "-q"])
+        if r.returncode:
+            c.item(f"visudo -c: {(r.stdout + r.stderr).strip()[:200]}")
+            bad += 1
+    except (OSError, subprocess.TimeoutExpired) as e:
+        c.item(f"visudo: {e}")
+        bad += 1
+    if bad:
+        return c.set("fail", f"{bad} problems in {len(files)} files")
+    return c.set("pass", f"{len(files)} files 440 root, syntax ok")
+
+
+def conf_values(text: str) -> dict:
+    out = {}
+    for line in text.splitlines():
+        m = re.match(r"\s*([A-Za-z_]+)\s*=\s*(.*?)\s*$", line)
+        if m and not line.lstrip().startswith("#"):
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def check_auditd_conf() -> Check:
+    c = Check("auditd-conf")
+    try:
+        have = conf_values(read(AUDITD_CONF))
+    except OSError as e:
+        return c.set("unknown", f"{AUDITD_CONF}: {e.strerror}")
+    for k, v in AUDITD_WANT.items():
+        if have.get(k, "").upper() != v.upper():
+            c.item(f"{k} = {have.get(k, '(unset)')}, want {v}")
+    if c.items:
+        return c.set("fail", f"{len(c.items)} of {len(AUDITD_WANT)} values differ")
+    return c.set("pass", f"{len(AUDITD_WANT)} values as set")
+
+
+def rule_lines(text: str) -> int:
+    return sum(1 for ln in text.splitlines() if re.match(r"\s*-[aw]\s", ln))
+
+
+def check_audit_loaded() -> Check:
+    c = Check("audit-loaded")
+    try:
+        r = run(["auditctl", "-l"])
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return c.set("unknown", f"auditctl: {e}")
+    if r.returncode:
+        return c.set("unknown", f"auditctl -l: {r.stderr.strip()[:120]}")
+    loaded = rule_lines(r.stdout)
+    want = 0
+    try:
+        for f in sorted(glob.glob(os.path.join(RULES_D, "*.rules"))):
+            want += rule_lines(read(f))
+    except OSError as e:
+        return c.set("unknown", f"{RULES_D}: {e.strerror}")
+    if loaded != want:
+        return c.set("fail", f"{loaded} loaded, {want} in rules.d (a reboot loads rules.d)")
+    return c.set("pass", f"{loaded} loaded = rules.d")
+
+
+def check_accounts() -> Check:
+    """No empty password, root locked, no system account (uid < 1000) with a usable
+    password. Uids only, no names."""
+    c = Check("accounts")
+    try:
+        uids = {}
+        for line in read(PASSWD_DB).splitlines():
+            f = line.split(":")
+            if len(f) >= 3 and f[2].isdigit():
+                uids[f[0]] = int(f[2])
+        shadow = [ln.split(":") for ln in read(SHADOW).splitlines() if ln.count(":") >= 2]
+    except OSError as e:
+        return c.set("unknown", f"{e.filename}: {e.strerror}")
+    usable = 0
+    for f in shadow:
+        uid, pw = uids.get(f[0], -1), f[1]
+        if pw == "":
+            c.item(f"uid {uid}: empty password")
+        elif pw.startswith(("!", "*")):
+            continue
+        else:
+            usable += 1
+            if uid == 0:
+                c.item("uid 0: root has a password (root stays locked)")
+            elif uid < 1000:
+                c.item(f"uid {uid}: system account with a password")
+    if c.items:
+        return c.set("fail", f"{len(c.items)} accounts not as wanted")
+    return c.set("pass", f"{usable} login accounts, root and system accounts locked")
+
+
+def check_firewalld_conf() -> Check:
+    c = Check("firewalld-conf")
+    try:
+        have = conf_values(read(FIREWALLD_CONF)).get("DefaultZone", "(unset)")
+    except OSError as e:
+        return c.set("unknown", f"{FIREWALLD_CONF}: {e.strerror}")
+    if have != DEFAULT_ZONE:
+        return c.set("fail", f"DefaultZone={have}, want {DEFAULT_ZONE}")
+    return c.set("pass", f"DefaultZone={have}")
+
+
+def check_bpf_jit() -> Check:
+    c = Check("bpf-jit")
+    try:
+        have = read(BPF_JIT).strip()
+    except OSError as e:
+        return c.set("unknown", f"{BPF_JIT}: {e.strerror}")
+    st = "pass" if have == BPF_JIT_WANT else "fail"
+    return c.set(st, f"net.core.bpf_jit_harden = {have}" + ("" if st == "pass" else f", want {BPF_JIT_WANT}"))
+
+
+def check_applied() -> Check:
+    c = Check("applied")
+    try:
+        names = [ln.strip() for ln in read(APPLIED).splitlines()
+                 if ln.strip() and not ln.startswith("#")]
+    except FileNotFoundError:
+        return c.set("fail", f"no {APPLIED} (harden-workstation.sh writes it)")
+    except OSError as e:
+        return c.set("unknown", f"{APPLIED}: {e.strerror}")
+    if not names:
+        return c.set("fail", f"{APPLIED} empty")
+    return c.set("pass", f"{len(names)} sections applied: {' '.join(names)}")
+
+
+# --- result -----------------------------------------------------------------------------
+
+def render(checks: list, now: float) -> str:
+    stamp = datetime.datetime.fromtimestamp(now).astimezone().isoformat(timespec="seconds")
+    out = ["# harden-check result (aidecheck.service); sectop posture row harden-check",
+           f"time\t{int(now)}\t{stamp}"]
+    for c in checks:
+        out.append(f"check\t{c.id}\t{c.status}\t{clean(c.summary)}")
+        out += [f"item\t{c.id}\t{i}" for i in c.items[:MAX_ITEMS + 1]]
+    return "\n".join(out) + "\n"
+
+
+def sectop_gid() -> int | None:
+    import grp
+    try:
+        return grp.getgrnam(GROUP).gr_gid
+    except KeyError:
+        return None
+
+
+def state_dir(path: str = STATE) -> None:
+    """STATE 0750 root:sectop (the section makes it; here only if it is missing)."""
+    if os.path.isdir(path):
+        return
+    os.makedirs(path, exist_ok=True)
+    gid = sectop_gid()
+    os.chown(path, 0, gid if gid is not None else 0)
+    os.chmod(path, 0o750 if gid is not None else 0o700)
+
+
+def write_result(text: str, path: str = RESULT) -> None:
+    """Atomic, 0640 root:sectop (0600 root if there is no group sectop)."""
+    d = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".result.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        gid = sectop_gid()
+        if gid is None:
+            os.chmod(tmp, 0o600)
+        else:
+            os.chown(tmp, 0, gid)
+            os.chmod(tmp, 0o640)
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
+def all_checks(now: float) -> list:
+    booted, _ = booted_deployment()
+    checks = []
+    for cid, fn in (("aide", lambda: check_aide(now, booted)), ("boot-image", check_boot_image),
+                    ("sudoers", check_sudoers), ("auditd-conf", check_auditd_conf),
+                    ("audit-loaded", check_audit_loaded), ("accounts", check_accounts),
+                    ("firewalld-conf", check_firewalld_conf), ("bpf-jit", check_bpf_jit),
+                    ("applied", check_applied)):
+        try:
+            checks.append(fn())
+        except Exception as e:          # one broken check must not hide the others
+            checks.append(Check(cid).set("unknown", f"error: {clean(e)}"))
+    return checks
+
+
+def do_check() -> int:
+    now = time.time()
+    checks = all_checks(now)
+    write_result(render(checks, now))
+    bad = [c.id for c in checks if c.status != "pass"]
+    print(f"harden-check: {len(checks) - len(bad)} of {len(checks)} pass"
+          + (f"; not pass: {' '.join(bad)}" if bad else ""))
+    for c in checks:
+        print(f"  {c.id:<15} {c.status:<7} {c.summary}")
+    return 0
+
+
+# --- init / accept ----------------------------------------------------------------------
+
+def write_accepted() -> None:
+    booted, _ = booted_deployment()
+    stamp = datetime.datetime.now().astimezone().isoformat(timespec="minutes")
+    fd, tmp = tempfile.mkstemp(dir=STATE, prefix=".accepted.")
+    with os.fdopen(fd, "w") as f:
+        f.write(f"{booted or '-'} {stamp}\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, ACCEPTED)
+
+
+def aide_as_unit(cmd: str) -> int:
+    """aide --init / --update in a transient service like aidecheck.service; its report
+    goes to this terminal. -> aide's exit status."""
+    argv = ["systemd-run", "--wait", "--pipe", "--quiet", "--collect",
+            "--unit=aidecheck-" + cmd.strip("-")]
+    for p in UNIT_PROPS:
+        argv += ["-p", p]
+    return subprocess.run(argv + [AIDE, cmd, "-c", AIDE_CONF]).returncode
+
+
+def do_init() -> int:
+    if os.path.exists(AIDE_DB):
+        print(f"harden-check --init: {AIDE_DB} exists (sudo harden-check --accept)")
+        return 1
+    rc = aide_as_unit("--init")
+    if rc != 0 or not os.path.exists(AIDE_NEW):
+        print(f"harden-check --init: aide --init failed (exit {rc})")
+        return 1
+    os.replace(AIDE_NEW, AIDE_DB)
+    write_accepted()
+    print(f"harden-check --init: {AIDE_DB} built")
+    return 0
+
+
+def ask(prompt: str) -> bool:
+    try:
+        with open("/dev/tty") as tty:
+            # keys typed earlier must not answer (admin scripts 40 / 42)
+            import termios
+            termios.tcflush(tty, termios.TCIFLUSH)
+            print(prompt, end=" ", flush=True)
+            return tty.readline().strip().lower() == "y"
+    except OSError:
+        return False
+
+
+def do_accept() -> int:
+    if not os.path.exists(AIDE_DB):
+        print("no database: sudo ./harden-workstation.sh integrity builds the first one")
+        return 1
+    print("aide --update: the changes since the last accept (also written to the new database)")
+    rc = aide_as_unit("--update")
+    if rc > 7 or not os.path.exists(AIDE_NEW):
+        print(f"aide --update failed (exit {rc}): nothing accepted")
+        if os.path.exists(AIDE_NEW):
+            os.unlink(AIDE_NEW)
+        return 1
+    if rc == 0:
+        print("no change since the last accept")
+    if not ask("take these as the new baseline? [y/N]"):
+        os.unlink(AIDE_NEW)
+        print("not accepted: the database is unchanged")
+        return 1
+    if os.path.exists(AIDE_DB):
+        os.replace(AIDE_DB, AIDE_DB + ".prev")
+    os.replace(AIDE_NEW, AIDE_DB)
+    write_accepted()
+    print(f"accepted: {AIDE_DB} (previous: {AIDE_DB}.prev). Check again:")
+    subprocess.run(["systemctl", "start", "aidecheck.service"])
+    try:
+        for line in read(RESULT).splitlines():
+            if line.startswith("check\t"):
+                _, cid, st, summ = (line.split("\t") + ["", "", ""])[:4]
+                print(f"  {cid:<15} {st:<7} {summ}")
+    except OSError as e:
+        print(f"{RESULT}: {e.strerror}")
+    return 0
+
+
+def main(argv: list) -> int:
+    if os.geteuid() != 0:
+        print("harden-check: run as root (aidecheck.service, or sudo for --accept)", file=sys.stderr)
+        return 2
+    os.umask(0o077)
+    state_dir()
+    if argv == []:
+        return do_check()
+    if argv == ["--init"]:
+        return do_init()
+    if argv == ["--accept"]:
+        return do_accept()
+    print("usage: harden-check [--init | --accept]", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Exception as e:
+        print(f"harden-check: {e}", file=sys.stderr)
+        sys.exit(10)

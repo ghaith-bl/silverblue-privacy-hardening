@@ -35,7 +35,7 @@ checked by hand; ids, the change since the last scan and the tailored counts:
 |------:|------|-------|
 | 56 | deviations on purpose: would break the machine, not useful on a personal device, two accounts, values changed on purpose, Fedora's own PAM profile | [docs/deviations.md](docs/deviations.md) |
 | 15 | scanner false positives on Silverblue / Fedora (checks the wrong file or a Debian path, syscalls missing on x86_64, wants a value in every sshd drop-in, audit rules broader than the check) | [docs/deviations.md](docs/deviations.md) |
-| 8  | backlog: AIDE (4), CIS crypto-policy module, umask (3) | - |
+| 8  | backlog: AIDE (4; `integrity` section since 2026-11-22, next scan), CIS crypto-policy module, umask (3) | - |
 | 4  | rootless container storage in the daily user's home (kind lab): subuid owners, the container's own modes | [docs/deviations.md](docs/deviations.md) |
 
 Tailored: [compliance/tailoring.xml](compliance/tailoring.xml) unselects the deviations and
@@ -150,6 +150,10 @@ sudo ./harden-workstation.sh time     # VPN connected; then chronyc -N authdata
 sudo ./harden-workstation.sh autoupdate  # OS staged daily (applied at reboot), Flatpaks daily
 sudo grub2-setpassword                # by hand, before kargs (user root at the menu)
 sudo ./harden-workstation.sh kargs    # reboot: LUKS unlock, Wi-Fi, VPN, a VM
+sudo rpm-ostree install aide && systemctl reboot
+sudo ./harden-workstation.sh integrity   # last: the AIDE baseline of everything above
+sudo harden-check --accept            # after a change you made or an OS update: shows
+                                      # every changed file, y = new baseline
 ```
 
 ## Sections
@@ -185,6 +189,7 @@ sudo ./harden-workstation.sh kargs    # reboot: LUKS unlock, Wi-Fi, VPN, a VM
 | `time`        | chrony: NTS only (Netnod + PTB), `authselectmode require`, `minsources 2`, no pool, no DHCP NTP | no time sync without the tunnel |
 | `autoupdate`  | CIS Controls v8.1 7.3 / 7.4: `/etc/rpm-ostreed.conf` `AutomaticUpdatePolicy=stage` + `rpm-ostreed-automatic.timer` (OS + layered packages downloaded daily, applied at the next boot); `flatpak-update-system.timer` + global user `flatpak-update-user.timer` (daily); `fwupd-refresh.timer` every second day (firmware metadata only); fwupd reports to LVFS off | updates arrive without asking; reboot to apply the OS one (`rpm-ostree status`); firmware / dbx: `fwupdmgr get-updates`, by hand |
 | `kargs`       | not CIS: `KERNEL_ARGS` via `rpm-ostree kargs` (next boot): AF_ALG off, random page allocator, no initramfs shell, freed memory zeroed, strict IOMMU, hashed pointers, no forced writes through /proc/<pid>/mem, signed modules only, IOMMU on, no debugfs, no writes to mounted block devices | no Adiantum / Serpent / Twofish LUKS, BlueZ mesh, iwd; boot failure halts; no debugfs |
+| `integrity`   | AIDE (package layered by hand): `/etc` (content, mode, owner, label; no times: every deployment copies /etc), `/boot`, `/var/usrlocal`, root's home, crontabs, the audit tools; `aidecheck.timer` (5 min after boot, daily) runs `aide --check`, then `harden-check`: boot kernel + initramfs = the image's copies, sudoers, auditd.conf, loaded = rules.d, no system account with a password, firewalld zone, `bpf_jit_harden`, applied sections. Result for sectop (posture `harden-check`); never fixes, never accepts by itself | sectop yellow after any change until `sudo harden-check --accept` |
 
 Reasons and costs of every not-CIS choice: [docs/deviations.md](docs/deviations.md).
 

@@ -1,0 +1,12 @@
+# AIDE check + root drift check: 5 minutes after boot and once a day; a day missed while
+# off runs at the next boot (decision 2026-11-22). Installed by harden-workstation.sh integrity.
+[Unit]
+Description=Daily AIDE check and root drift check
+
+[Timer]
+OnBootSec=5min
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

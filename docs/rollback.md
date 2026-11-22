@@ -11,6 +11,9 @@ sudo sed -i 's/^minlen = .*/minlen = 14/' /etc/security/pwquality.conf   # pam: 
 sudo systemctl unmask <unit>                     # bring a service back
 sudo rpm-ostree override reset open-vm-tools-desktop open-vm-tools spice-vdagent   # guesttools: back at the
                                                  # next boot, its setuid rule too (audit-privileged-sync)
+sudo systemctl disable --now aidecheck.timer     # integrity: no daily check (database stays;
+                                                 # rpm-ostree uninstall aide + reboot: package gone)
+sudo cp /var/lib/aide/aide.db.gz.prev /var/lib/aide/aide.db.gz   # integrity: the baseline before the last accept
 sudo rm /etc/wireplumber/wireplumber.conf.d/90-disable-mic.conf
 systemctl --user restart wireplumber
 sudo rm /etc/NetworkManager/conf.d/90-privacy.conf /etc/systemd/resolved.conf.d/90-privacy.conf

@@ -87,6 +87,7 @@
     <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_journald_disable_forward_to_syslog" selected="false"/>
     <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_dconf_gnome_disable_user_list" selected="false"/>
     <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_dconf_db_up_to_date" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_aide_periodic_cron_checking" selected="false"/>
     <!-- Rootless container storage -->
     <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_no_files_or_dirs_unowned_by_user" selected="false"/>
     <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_no_files_or_dirs_ungroupowned" selected="false"/>

@@ -85,7 +85,9 @@ studying, testing and adding, and this page changes with it.
   off (host; into the script: planned)
 - network privacy: random MAC per network, a generic hostname, no DHCP ids from the
   machine, DNS only through the tunnel, no LLMNR / mDNS
-- detection: auditd (53 rules + two per setuid program, locked until reboot), journald, sectop (live view)
+- detection: auditd (53 rules + two per setuid program, locked until reboot), journald,
+  AIDE on /etc, /boot, root's scripts and crontabs + a daily root check (boot files = the
+  image, sudoers, accounts; integrity section), sectop (live view)
 
 ## Reference
 
@@ -139,6 +141,7 @@ Tor, Qubes and Tails list the same kind of limits.
 | sysctl, modules, guesttools, kargs, autoupdate | A2: the step from a user to the kernel / root (kargs `iommu`: A7 DMA devices; `rd.shell=0`: a person at the console) |
 | coredump | secrets in crash dumps (A2, A8) |
 | journald, auditd, audit-rules (+ sectop) | detection (A8); keeping logs is a G1 cost |
+| integrity (+ sectop) | detection (A8, A7): any changed file in /etc, /boot, root's scripts, crontabs stays yellow until I accept it; an initramfs that is not the image's copy |
 | gnome | a person at an unlocked laptop; media that start by themselves |
 | sudo, su, pam, accounts | A2 reaching the admin / root; guessing at the lock screen |
 | pwage | compliance only: no direct adversary |
@@ -173,6 +176,10 @@ Tor, Qubes and Tails list the same kind of limits.
 - boot chain: Secure Boot checks shim, GRUB and the kernel, not the initramfs; `/boot` is
   not encrypted. With repeated access someone can change the initramfs or the boot
   entries and record the disk passphrase. The GRUB password protects the menu only.
+  Since 2026-11-22 the daily root check compares the kernel and initramfs in `/boot` with
+  the image's copies and AIDE reports any change in `/boot`: found after the fact, at the
+  next check, not prevented; a changed initramfs runs with root and can change the AIDE
+  database too (detection best effort, as for A8)
   The initramfs cannot be encrypted: it is the program that asks for the passphrase and
   runs before the disk is open. The fix is to verify it: a signed unified kernel image
   (kernel + initramfs + command line in one signed file). Fedora 44 has sealed Atomic

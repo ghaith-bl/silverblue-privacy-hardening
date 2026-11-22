@@ -21,6 +21,19 @@ Tests run after hardening + reboot. All passed.
 | Steam game | launch | OK |
 | Speakers | `speaker-test -c 2 -t wav -l 1` | OK |
 
+## Integrity (2026-11-22)
+
+| Check | Command | Expected |
+|-------|---------|----------|
+| package | `rpm -q aide` | a version (layered) |
+| config | `sudo aide --config-check -c /etc/aide.conf` | exit 0 |
+| timer | `systemctl list-timers aidecheck.timer` | next run within a day |
+| last run | `systemctl show -p Result aidecheck.service`; `sudo cat /var/lib/harden-check/result` | `success`; every `check` line `pass` after an accept |
+| result mode | `stat -c '%a %U:%G' /var/lib/harden-check /var/lib/harden-check/result` | `750 root:sectop`, `640 root:sectop` |
+| a change shows | `sudo touch /etc/harden-test && sudo systemctl start aidecheck.service` | sectop `harden-check` yellow, item `other + /etc/harden-test`; then `sudo rm /etc/harden-test`, start again: green |
+| accept | `sudo harden-check --accept` | lists the changes, `y` = new baseline, check again |
+| scanner | OpenSCAP `package_aide_installed`, `aide_build_database`, `aide_check_audit_tools` | pass (`aide_periodic_cron_checking`: false positive row) |
+
 ## Account split (2026-11-05)
 
 `sudo tools/check-accounts.sh <admin> null` from the admin console, after a reboot:

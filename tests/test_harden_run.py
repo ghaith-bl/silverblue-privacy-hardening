@@ -41,7 +41,8 @@ class Run(unittest.TestCase):
 
     def bash(self, body):
         """source the script, BACKUP_ROOT in the temp dir, then body; (rc, output)"""
-        code = f'source "$1"; BACKUP_ROOT="{self.bk}"; cd "{self.d}"\n{body}'
+        code = (f'source "$1"; BACKUP_ROOT="{self.bk}"; APPLIED_LIST="{self.d}/applied"; '
+                f'cd "{self.d}"\n{body}')
         r = subprocess.run(['bash', '-c', code, 'test', SCRIPT], capture_output=True,
                            text=True, timeout=60,
                            env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': self.d})
@@ -173,6 +174,35 @@ class Run(unittest.TestCase):
         self.assertIn('PTRACE_SCOPE must be', out)
         self.assertRegex(out, r'sysctl +STOPPED \(exit 1\)')
         self.assertIn('not run: modules', out)
+
+    def test_applied_list(self):
+        # every section that ran to the end, once, sorted; a stopped one is not on it;
+        # a second run leaves the file as it is (harden-check reads it)
+        lst = os.path.join(self.d, 'applied')
+        rc, out = self.bash('''
+            sec_sysctl()  { :; }
+            sec_modules() { :; }
+            run_sections sysctl modules
+            ''')
+        self.assertEqual(rc, 0, out)
+        lines = read(lst).splitlines()
+        self.assertTrue(lines[0].startswith('#'))
+        self.assertEqual(lines[1:], ['modules', 'sysctl'])
+        mtime = os.stat(lst).st_mtime_ns
+        rc, out = self.bash('''
+            sec_sysctl() { :; }
+            sec_kargs()  { die "stopped"; }
+            run_sections sysctl kargs
+            ''')
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(read(lst).splitlines()[1:], ['modules', 'sysctl'])
+        self.assertEqual(os.stat(lst).st_mtime_ns, mtime)
+        rc, out = self.bash('''
+            sec_coredump() { :; }
+            run_sections coredump
+            ''')
+        self.assertEqual(read(lst).splitlines()[1:], ['coredump', 'modules', 'sysctl'])
+        self.assertEqual(os.stat(lst).st_mode & 0o777, 0o644)
 
     def test_handled_failures_do_not_stop(self):
         rc, out = self.bash('''

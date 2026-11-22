@@ -237,6 +237,26 @@
   ReadOnlyPaths= must be a type PID 1 may mount on. sectop compares the `privileged` rules with the programs it finds
   (posture `audit-rules`, `setuid_rules = 2`).
 
+## AIDE on Silverblue (integrity section, 2026-11-22)
+
+- Every new deployment copies /etc again: on the update day 2026-11-20 4841 of 4921
+  entries got a new ctime (and mtime), 2 got new content. AIDE groups with times, inode,
+  link or block count (Fedora's `R`, `L`, `>`) report all of them after every update:
+  /etc gets content + mode + owner + label + ACL + xattrs only.
+- `/usr` is the image (composefs, read-only): out of scope, except the six audit tools the
+  scanner wants; new setuid programs: sectop `setuid-known`.
+- Files a daemon rewrites (NetworkManager profiles, Mullvad's json, asusd, supergfxd, tuned,
+  adjtime, cups subscriptions, systemd's per-user resource drop-ins written at every
+  login): names, mode, owner, label only.
+- The initramfs is not covered by Secure Boot: the root check compares `/boot/ostree/*/`
+  kernel + initramfs with `/usr/lib/modules/<kver>/` of their deployment (ostree copies
+  them from there).
+- scap-security-guide's periodic-check rule reads cron files only; the CIS benchmarks also
+  give `aidecheck.service` + `aidecheck.timer`: same names, scanner false positive row.
+- aide may run in its own SELinux domain when systemd starts it: no `NoNewPrivileges`
+  (and nothing that implies it) in the unit; `--init` / `--accept` run aide through
+  `systemd-run` with the unit's properties, so both read the same files.
+
 ## Audio
 
 - Laptop mic and speakers share one HDA codec (ALC285) -> blacklisting the driver kills all sound.

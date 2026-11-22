@@ -79,7 +79,9 @@ Reasons and check commands: [docs/deviations.md](../docs/deviations.md), same se
   `no_files_or_dirs_ungroupowned`, `file_permissions_unauthorized_world_writable`,
   `dir_perms_world_writable_sticky_bits`.
 - Backlog (not decided yet, no row): AIDE (`package_aide_installed`, `aide_build_database`,
-  `aide_check_audit_tools`, `aide_periodic_cron_checking`), CIS crypto-policy module
+  `aide_check_audit_tools`, `aide_periodic_cron_checking`; since 2026-11-22 the integrity
+  section: the first three pass at the next scan, the fourth is a scanner false positive
+  row), CIS crypto-policy module
   (`configure_custom_crypto_policy_cis`), umask (`accounts_umask_etc_bashrc`,
   `accounts_umask_etc_login_defs`, `accounts_umask_etc_profile`).
 

@@ -97,11 +97,13 @@ fi
 
 # created by the first backup of a run only: a run that replaces nothing leaves no folder
 BACKUP_ROOT="/var/backups/hardening/$(date +%Y%m%d-%H%M%S)"
-SECTIONS=(sysctl modules coredump journald gnome sudo pam pwage su accounts services guesttools loopback cron sshd auditd audit-rules perms mic netprivacy mullvad kvmlan browsevm svirt usbguard appunit time autoupdate kargs)
+SECTIONS=(sysctl modules coredump journald gnome sudo pam pwage su accounts services guesttools loopback cron sshd auditd audit-rules perms mic netprivacy mullvad kvmlan browsevm svirt usbguard appunit time autoupdate kargs integrity)
 CUR_SECTION=""      # the section running now (error report, change list)
 CHANGE_LOG=""       # file: one line "<section> TAB <what>" per change (pipelines run
                     # functions in a subshell: a variable would lose their changes)
 DONE_SECTIONS=()    # sections run to the end
+APPLIED_LIST="/etc/harden-workstation/applied"  # every section that ran to the end here once
+                    # (name per line; harden-check reads it); tests point it elsewhere
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -2124,6 +2126,75 @@ sec_kargs() {
   log "new args work from the next boot; boot or unlock fails: previous entry in GRUB (Esc / Shift)"
 }
 
+## Not CIS here, CIS for the scanner: AIDE (CIS "AIDE installed", "filesystem integrity
+## regularly checked"; scap-security-guide aide_*) + the root drift check (review
+## 2026-11-17, D-U1; scope 2026-11-22). Package layered by hand first (rpm-ostree install
+## aide, reboot). /etc/aide.conf from integrity/aide.conf (scope + why: in that file),
+## /usr/local/sbin/harden-check, aidecheck.service + .timer (5 min after boot, daily). The
+## first run builds the database = the baseline. Every later change of a watched file,
+## also one by this script, stays yellow in sectop until the admin accepts it:
+## sudo harden-check --accept (shows every change, y = new baseline). Never accepts by
+## itself: a new aide.conf (other scope) is accepted the same way. Never fixes anything.
+sec_integrity() {
+  local src conf=/etc/aide.conf tool=/usr/local/sbin/harden-check state=/var/lib/harden-check
+  local unit=/etc/systemd/system/aidecheck.service timer=/etc/systemd/system/aidecheck.timer
+  local c0 f grp=root tmp db=/var/lib/aide/aide.db.gz conf_changed=0
+  src="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/integrity"
+  if ! rpm -q aide >/dev/null 2>&1; then
+    warn "aide not installed: rpm-ostree install aide, reboot, run again"
+    return 0
+  fi
+  for f in aide.conf harden-check aidecheck.service aidecheck.timer; do
+    [[ -f $src/$f ]] || die "$src/$f missing (run from the repo)"
+  done
+  # a config aide refuses never replaces the one in place (temp copy in /etc: a label
+  # aide's SELinux domain may read)
+  tmp=$(mktemp /etc/.aide.conf.XXXXXX)
+  cat "$src/aide.conf" > "$tmp"
+  if ! aide --config-check -c "$tmp" >/dev/null 2>&1; then
+    aide --config-check -c "$tmp" 2>&1 | head -5 >&2 || true
+    rm -f "$tmp"
+    die "aide refuses $src/aide.conf: $conf kept"
+  fi
+  rm -f "$tmp"
+  c0=$(section_changes)
+  write_file "$conf" 0600 < "$src/aide.conf"
+  (( $(section_changes) == c0 )) || conf_changed=1
+  write_file "$tool" 0755 < "$src/harden-check"
+  c0=$(section_changes)
+  write_file "$unit" 0644 < "$src/aidecheck.service"
+  write_file "$timer" 0644 < "$src/aidecheck.timer"
+  (( $(section_changes) == c0 )) || systemctl daemon-reload
+  # result folder: root writes, sectop's posture reads (no group sectop: root only)
+  if getent group sectop >/dev/null; then grp=sectop; fi
+  if [[ ! -d $state ]]; then
+    install -d -m 0750 -o root -g "$grp" "$state"; changed "$state (0750 root:$grp)"
+  else
+    set_owner_mode "root:$grp" 0750 "$state"
+  fi
+  # everything this section writes in the scope comes before the first database: the
+  # timer link, this section on the applied list (run_sections adds it again at the end:
+  # no change then); a first check right after it has nothing to report
+  enable_unit aidecheck.timer || warn "enable aidecheck.timer failed: no daily check"
+  applied integrity
+  if [[ ! -e $db ]]; then
+    log "first AIDE database (about a minute) ..."
+    "$tool" --init || die "harden-check --init failed: no database"
+    changed "$db built (baseline)"
+  elif (( conf_changed )); then
+    warn "$conf changed: the database still has the old scope; sudo harden-check --accept shows what the new one adds, y takes it"
+  fi
+  enable_unit aidecheck.timer now || warn "start aidecheck.timer failed: no daily check"
+  # one check now (not a change: reads only, writes the result for sectop)
+  log "aidecheck.service: aide --check + harden-check (about a minute) ..."
+  if systemctl start aidecheck.service; then
+    log "aidecheck.service: $(systemctl show -p Result --value aidecheck.service)"
+    awk -F '\t' '$1 == "check" { printf "  %-15s %-7s %s\n", $2, $3, $4 }' "$state/result" 2>/dev/null || true
+  else
+    warn "aidecheck.service failed: journalctl -u aidecheck.service"
+  fi
+}
+
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
@@ -2175,6 +2246,19 @@ on_exit() {
   fi
   rm -f "$CHANGE_LOG"
   exit "$rc"
+}
+
+# applied <section>: on APPLIED_LIST once (sorted, no change when it is there)
+applied() {
+  local tmp
+  if [[ -f $APPLIED_LIST ]] && grep -qxF -- "$1" "$APPLIED_LIST"; then return 0; fi
+  tmp=$(mktemp)
+  { echo "# sections of harden-workstation.sh run to the end here (harden-check reads it)"
+    { if [[ -f $APPLIED_LIST ]]; then grep -v '^#' "$APPLIED_LIST" || true; fi; echo "$1"; } | sort -u
+  } > "$tmp"
+  mkdir -p "$(dirname "$APPLIED_LIST")"
+  install -m 0644 "$tmp" "$APPLIED_LIST"
+  rm -f "$tmp"
 }
 
 RUN_LIST=()
@@ -2231,6 +2315,7 @@ run_sections() {
       time)        sec_time ;;
       autoupdate)  sec_autoupdate ;;
       kargs)       sec_kargs ;;
+      integrity)   sec_integrity ;;
       *)           warn "unknown section: $s" ;;
     esac
     n=$(section_changes)
@@ -2240,7 +2325,7 @@ run_sections() {
     else
       log "$s: no change"
     fi
-    if [[ " ${SECTIONS[*]} " == *" $s "* ]]; then DONE_SECTIONS+=("$s"); fi
+    if [[ " ${SECTIONS[*]} " == *" $s "* ]]; then DONE_SECTIONS+=("$s"); applied "$s"; fi
     CUR_SECTION=""
   done
 }

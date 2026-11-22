@@ -1,0 +1,27 @@
+# AIDE check, then the root drift check (harden-check: result for sectop). Installed by
+# harden-workstation.sh integrity; run by aidecheck.timer. Names and the first ExecStart as
+# in the CIS benchmarks' example (filesystem integrity regularly checked). Never fixes.
+# aide exits 1..7 when it found changes (added 1, removed 2, changed 4): not a failure;
+# 14 and above: aide failed, the unit fails (sectop: failed units, old result goes stale).
+[Unit]
+Description=AIDE check and root drift check
+Documentation=man:aide(1) file:///usr/local/sbin/harden-check
+After=local-fs.target
+ConditionPathExists=/var/lib/aide/aide.db.gz
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/aide --check
+ExecStart=/usr/local/sbin/harden-check
+SuccessExitStatus=1 2 3 4 5 6 7
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+TimeoutStartSec=15min
+# No ProtectSystem / ReadWritePaths / ProtectHome (bind mounts by PID 1: SELinux mounton,
+# host 2026-11-22, audit-privileged-sync), no NoNewPrivileges (aide may run in its own
+# SELinux domain: no domain change under no_new_privs). Root-owned programs, no input
+# from a home; reads everything in the scope, writes /var/lib/aide, /var/log/aide and
+# /var/lib/harden-check only.
+PrivateNetwork=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_AUDIT_CONTROL
