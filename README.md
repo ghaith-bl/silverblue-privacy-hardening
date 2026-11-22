@@ -38,6 +38,12 @@ checked by hand:
 | 8  | backlog: AIDE (4), CIS crypto-policy module, umask (3) | - |
 | 4  | rootless container storage in the daily user's home (kind lab): subuid owners, the container's own modes | [docs/deviations.md](docs/deviations.md) |
 
+Since that scan (2026-11-21): the audit rules are written in the text the scanner matches
+(the same rules; 12 of the 16 pass that way, `privileged_commands` depends on what the
+scanner counts, 3 stay broader on purpose), and the copies written only for the scanner
+are gone (one place per setting): those fails are false positives in
+[docs/deviations.md](docs/deviations.md). New numbers with the next scan.
+
 Reports stay on the host, never in git (`.gitignore`: `scap-*`).
 
 ## Environment
@@ -154,8 +160,8 @@ sudo ./harden-workstation.sh kargs    # reboot: LUKS unlock, Wi-Fi, VPN, a VM
 | `sysctl`      | kernel + network hardening (`/etc/sysctl.d/90-hardening.conf`); not CIS: KSPP attack surface (io_uring off, no tty ldisc autoload, FIFO / file protection 2, SysRq off, WARN / Oops limit 100, mmap bits max) | `dmesg`; gdb / strace do not work, not even with sudo; no io_uring |
 | `modules`     | blocks unused filesystems / protocols | no HFS / UDF mounts |
 | `coredump`    | no core dumps | crashes not saved |
-| `journald`    | persistent, compressed journal, no syslog forward (drop-in + main file) | none |
-| `gnome`       | no automount / autorun, 15 min idle lock, no login user list (dconf `gdm` + `distro`, all locked); GDM: password login only (switchable authentication, passkey, web login, smartcard off and locked; fingerprint with `FINGERPRINT=disable`) | type the user name at login; no other login method offered |
+| `journald`    | persistent, compressed journal, no syslog forward (drop-in only) | none |
+| `gnome`       | no automount / autorun, 15 min idle lock, no login user list (dconf `gdm`, all locked); GDM: password login only (switchable authentication, passkey, web login, smartcard off and locked; fingerprint with `FINGERPRINT=disable`) | type the user name at login; no other login method offered |
 | `sudo`        | `use_pty`, `/var/log/sudo.log`, 5 min timeout | password asked again after 5 min |
 | `pam`         | faillock (5 tries -> 15 min), pwhistory (24), pwquality (15 chars, 4 classes, dictionary check), no empty passwords | lockout includes the lock screen |
 | `pwage`       | password max age `PASS_MAX_DAYS`, min age `PASS_MIN_DAYS`, warning `PASS_WARN_AGE` (login.defs + every login account); no lock after expiry | change the password once a year; not twice in one day (root can: `sudo passwd <user>`) |
@@ -167,7 +173,7 @@ sudo ./harden-workstation.sh kargs    # reboot: LUKS unlock, Wi-Fi, VPN, a VM
 | `cron`        | root-only cron dirs (modes set again at every boot by tmpfiles), `cron.allow` / `at.allow` | crontab: root + the daily user; `at`: root only |
 | `sshd`        | hardened drop-in `40-cis.conf`, server masked | no incoming SSH |
 | `auditd`      | SYSLOG / SUSPEND instead of HALT, log ring 40 x 32 MiB | up to 1280 MiB in `/var/log/audit` |
-| `audit-rules` | CIS rules, `-c`, setuid list from the host, `-e 2` lock; not CIS: `af-alg`, `io-uring` (2 rules each). This host: 73 (47 + one per setuid program: 26); run again after updates | more log volume; a rule change needs a reboot |
+| `audit-rules` | CIS rules in the scanner's text (path rules once per arch), `-c`, setuid list from the host, `-e 2` lock; not CIS: `af-alg`, `io-uring` (2 rules each). 53 + two per setuid program (this host: 105 with 26); run again after updates | more log volume; a rule change needs a reboot |
 | `perms`       | audit config 0640, `/boot/grub2` files 0600 (set again at boot by tmpfiles), dotfiles in the homes 0740 or stricter (daily user and admin) | none |
 | `mic`         | WirePlumber rule disables capture nodes | no microphone |
 | `netprivacy`  | not CIS: random MAC, no hostname in DHCP, generic hostname (also a kernel arg), DHCP ids from that MAC, IPv6 temporary addresses, LLMNR + mDNS off, NetworkManager hands systemd-resolved no network's DNS (`dns=none`, `systemd-resolved=false`), no DNS servers and IPv6 off in Wi-Fi / cable profiles; a new network's profile gets the same on its first connect (NetworkManager dispatcher hook) | new device on the router each connect; prompt shows `localhost`; no DNS without the tunnel; no IPv6 on Wi-Fi / cable |

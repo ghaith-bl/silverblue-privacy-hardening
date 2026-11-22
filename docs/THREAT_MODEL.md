@@ -85,7 +85,7 @@ studying, testing and adding, and this page changes with it.
   off (host; into the script: planned)
 - network privacy: random MAC per network, a generic hostname, no DHCP ids from the
   machine, DNS only through the tunnel, no LLMNR / mDNS
-- detection: auditd (73 rules, locked until reboot), journald, sectop (live view)
+- detection: auditd (53 rules + two per setuid program, locked until reboot), journald, sectop (live view)
 
 ## Reference
 

@@ -71,8 +71,10 @@ Tests run after hardening + reboot. All passed.
 |-------|---------|----------|
 | second run changes nothing | the same sections again (`sudo ADMIN_USER=<admin> DAILY_USER=<daily> ./harden-workstation.sh <sections>`) | `no change` per section, summary `Backups: none`, no new folder in `/var/backups/hardening/` |
 | a failed command is reported | (sandbox / VM) a section with a missing tool, e.g. no `ip` for `browsevm` | `STOP: section browsevm, sec_browsevm line N, exit 127: have=$(ip ...)`, summary: stopped section, `not run:` list |
-| audit rules loaded | `sudo auditctl -l \| wc -l` | 73 (this host 2026-11-17: 47 + one per setuid program; changes with the setuid list) |
-| setuid / setgid audited | `sudo auditctl -l \| grep -c 'key=privileged'` | `find /usr -xdev -type f \( -perm -4000 -o -perm -2000 \) \| wc -l` (the same number; 26 on 2026-11-17, after `guesttools`) |
+| audit rules loaded | `sudo auditctl -l \| wc -l` | 53 + two per setuid program (since 2026-11-21: path rules once per arch; this host: 105 with 26 programs; changes with the setuid list) |
+| setuid / setgid audited | `sudo auditctl -l \| grep -c 'key=privileged'` | twice `find /usr -xdev -type f \( -perm -4000 -o -perm -2000 \) \| wc -l` (one rule per arch each) |
+| path rules per arch | `sudo auditctl -l \| grep -- '-F path=' \| grep -vc 'arch=b'` | `0` |
+| usermod rule | `readlink -f /usr/sbin/usermod` | `/usr/bin/usermod` (the rule's path `/usr/sbin/usermod` reaches the program) |
 | guesttools | `rpm-ostree status --booted --json \| grep -A5 requested-base-removals`; `rpm -q open-vm-tools open-vm-tools-desktop spice-vdagent`; `ls /etc/xdg/autostart \| grep -iE 'vmware\|vbox\|spice'` | the three names listed; `not installed` each; no autostart file |
 | audit rules locked | `sudo auditctl -s \| grep enabled` | `enabled 2` |
 | lock refuses changes | `sudo auditctl -w /tmp -p wa -k test`; `sudo auditctl -l \| wc -l` | error; count unchanged |
@@ -82,6 +84,8 @@ Tests run after hardening + reboot. All passed.
 | identity watch | `sudo touch /etc/passwd; sudo ausearch -k identity -ts recent -i` | event with `auid=<user>` |
 | hostname syscall | `sudo hostname "$(hostname)"; sudo ausearch -k system-locale -ts recent -i` | `syscall=sethostname` |
 | SELinux policy watch | `sudo touch /etc/selinux/config; sudo ausearch -k MAC-policy -ts recent -i` | event |
+| journal not forwarded | `systemd-analyze cat-config systemd/journald.conf \| grep ForwardToSyslog`; `ls /etc/systemd/journald.conf` | `ForwardToSyslog=no` (90-cis.conf); no such file (one place per setting) |
+| no login user list | `DCONF_PROFILE=gdm dconf read /org/gnome/login-screen/disable-user-list`; `ls /etc/dconf/db/distro.d/` | `true`; no `90-cis-hardening` (db `gdm` only) |
 | sysctl | `sysctl kernel.yama.ptrace_scope kernel.kexec_load_disabled fs.suid_dumpable` | `PTRACE_SCOPE`, `1`, `0` |
 | sysctl: attack surface | `sysctl kernel.io_uring_disabled dev.tty.ldisc_autoload fs.protected_fifos fs.protected_regular kernel.sysrq kernel.warn_limit kernel.oops_limit` | `2`, `0`, `2`, `2`, `0`, `100`, `100` |
 | sysctl: mmap bits | `sudo sysctl vm.mmap_rnd_bits vm.mmap_rnd_compat_bits` (root only, 0600) | `32`, `16` |

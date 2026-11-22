@@ -54,10 +54,7 @@ sudo rm /usr/local/share/applications/brave-browser.desktop /usr/local/bin/app-u
 sudo hostfw noscope observe                      # out_noscope: log only again
 sudo firewall-cmd --permanent --zone=trusted --remove-interface=lo && sudo firewall-cmd --reload   # loopback
 sudo rm /etc/tmpfiles.d/90-cis-cron.conf          # cron modes no longer set at boot
-sudo rm /etc/dconf/db/{gdm,distro}.d/90-cis-hardening /etc/dconf/db/{gdm,distro}.d/locks/90-cis-hardening
-sudo dconf update                                # login user list back (next GDM start)
-sudo rm /etc/systemd/journald.conf.d/90-cis.conf  # journald drop-in
-sudo rm /etc/systemd/journald.conf                # main file: only if the section created it (else backup)
+sudo rm /etc/systemd/journald.conf.d/90-cis.conf  # journald drop-in (the only place since 2026-11-21)
 sudo systemctl restart systemd-journald
 sudo rm /etc/tmpfiles.d/90-cis-grub.conf          # GRUB file modes no longer set at boot
 sudo chage -M 99999 <user>                        # pwage: no expiry (login.defs: backup)
@@ -82,6 +79,9 @@ sudo rpm-ostree kargs --delete=hash_pointers=always --delete=proc_mem.force_over
   --delete=module.sig_enforce=1 --delete=intel_iommu=on --delete=debugfs=off \
   --delete=bdev_allow_write_mounted=0                                  # then reboot
 sudo rm /etc/audit/rules.d/70-io-uring.rules && sudo augenrules   # loads at the next boot
+sudo cp /var/backups/hardening/<time>/etc/audit/rules.d/5*.rules /etc/audit/rules.d/ && sudo augenrules
+                                                 # audit rule text before the scanner's form (2026-11-21):
+                                                 # the same rules, path rules without arch; next boot
 sudo rm /boot/grub2/user.cfg                     # GRUB password off
 sudo rm /etc/audit/rules.d/99-finalize.rules     # audit lock off, then reboot
 sudo rpm-ostree rollback                         # after booting the previous GRUB entry

@@ -376,28 +376,27 @@ Storage=persistent
 Compress=yes
 ForwardToSyslog=no
 EOF
-  # also in the main file: the scanner reads only /etc/systemd/journald.conf (Fedora ships
-  # the main file in /usr/lib, comments only; the drop-in above wins either way)
-  if [[ ! -e $main ]]; then
-    write_file "$main" 0644 <<'EOF'
-# CIS: ForwardToSyslog also here for scanners; settings: journald.conf.d/90-cis.conf
-[Journal]
-ForwardToSyslog=no
-EOF
-  elif grep -Eq '^[#[:space:]]*ForwardToSyslog=' "$main"; then
-    tmp=$(mktemp)
-    sed -E 's/^[#[:space:]]*ForwardToSyslog=.*/ForwardToSyslog=no/' "$main" > "$tmp"
-    commit_file "$main" "$tmp"
-  else
-    warn "$main has no ForwardToSyslog line: add ForwardToSyslog=no under [Journal] by hand"
+  # One place per setting (review 2026-11-17, C-4): the drop-in above. The copy of
+  # ForwardToSyslog this script wrote into the main file for the scanner (it reads only
+  # /etc/systemd/journald.conf) goes; the scanner's fail is a false positive
+  # (docs/deviations.md). Fedora 44 has no main file in /etc (defaults in /usr/lib).
+  # A main file with other content stays: drop-ins win over it.
+  tmp=$(mktemp)
+  printf '%s\n' '# CIS: ForwardToSyslog also here for scanners; settings: journald.conf.d/90-cis.conf' \
+    '[Journal]' 'ForwardToSyslog=no' > "$tmp"
+  if [[ -f $main && ! -L $main ]] && cmp -s "$tmp" "$main"; then
+    backup "$main"; rm -f "$main"
+    log "removed $main (scanner copy; the setting stays in journald.conf.d/90-cis.conf)"
+    changed "removed $main"
   fi
+  rm -f "$tmp"
   if (( $(section_changes) )); then
     if systemctl restart systemd-journald; then log "journald restarted"; else warn "restart journald failed"; fi
   fi
 }
 
 sec_gnome() {
-  local profile_src content
+  local profile_src content f
   if ! grep -qs 'system-db:local' /etc/dconf/profile/user /usr/share/dconf/profile/user; then
     profile_src=/etc/dconf/profile/user
     [[ -e $profile_src ]] || profile_src=/usr/share/dconf/profile/user
@@ -444,18 +443,17 @@ EOF
     printf '/org/gnome/login-screen/%s\n' disable-user-list "${gdm_off[@]}" |
       write_file /etc/dconf/db/gdm.d/locks/90-cis-hardening 0644
     log "GDM: password login only (off + locked: ${gdm_off[*]#enable-})"
-    # disable-user-list again in db "distro" (also in GDM's profile): scap-security-guide
-    # checks only there
-    write_file /etc/dconf/db/distro.d/90-cis-hardening 0644 <<'EOF'
-[org/gnome/login-screen]
-disable-user-list=true
-EOF
-    write_file /etc/dconf/db/distro.d/locks/90-cis-hardening 0644 <<'EOF'
-/org/gnome/login-screen/disable-user-list
-EOF
   else
     warn "gdm dconf profile not found - login user list and GDM login methods left as they are"
   fi
+  # One place per setting (review 2026-11-17, C-4): disable-user-list stays in db "gdm"
+  # above. The copy in db "distro" (scap-security-guide checks only there) goes; the
+  # scanner's fail is a false positive (docs/deviations.md)
+  for f in /etc/dconf/db/distro.d/90-cis-hardening /etc/dconf/db/distro.d/locks/90-cis-hardening; do
+    if [[ -e $f || -L $f ]]; then
+      backup "$f"; rm -f "$f"; log "removed $f (scanner copy)"; changed "removed $f"
+    fi
+  done
   if (( $(section_changes) )); then
     if dconf update; then log "dconf databases updated (log out/in to see changes)"
     else warn "dconf update failed - run: sudo dconf update"; fi
@@ -993,6 +991,122 @@ sec_auditd() {
   if auditctl --signal reload >/dev/null 2>&1; then log "auditd configuration reloaded"; else warn "reload auditd manually or reboot"; fi
 }
 
+# Audit rule text in the form scap-security-guide's checks match (review 2026-11-17, C-2;
+# checked against scap-security-guide 0.1.82): the same rules as before in another text.
+# - path rules once per arch (b32 + b64): a path rule without arch matched both, so the
+#   events stay the same, `auditctl -l` lists two lines where it had one
+# - folder watches with a trailing slash: auditctl trims it, the kernel gets the same rule
+# - user_emulation: -S before -C
+# Not in the scanner's form on purpose (docs/deviations.md, scanner false positives):
+# sethostname / setdomainname from every caller (the scanner wants login users only),
+# no extra watch on /etc/NetworkManager/system-connections/ (the folder watch covers it).
+
+# path_rule <path> <key>: <path> run by a login user, one rule per arch
+path_rule() {
+  local a
+  for a in b32 b64; do
+    printf -- '-a always,exit -F arch=%s -F path=%s -F perm=x -F auid>=1000 -F auid!=unset -k %s\n' "$a" "$1" "$2"
+  done
+}
+
+# rules_cis: content of 50-cis-workstation.rules
+rules_cis() {
+  cat <<'EOF'
+## =====================================================================
+## CIS L2 workstation audit rules. Syscall and path rules list both
+## arches; file and folder watches (-w) cover 32-bit and 64-bit programs.
+## =====================================================================
+
+## ---- Time changes (chronyd excluded: it adjusts the clock all the time) ----
+-a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime -F subj_type!=chronyd_t -k time-change
+-a always,exit -F arch=b32 -S adjtimex,settimeofday,clock_settime -F subj_type!=chronyd_t -k time-change
+-w /etc/localtime -p wa -k time-change
+
+## ---- Hostname and network environment ----
+## sethostname / setdomainname from every caller: systemd-hostnamed (hostnamectl,
+## NetworkManager) has no login uid
+-a always,exit -F arch=b64 -S sethostname,setdomainname -k system-locale
+-a always,exit -F arch=b32 -S sethostname,setdomainname -k system-locale
+-w /etc/issue -p wa -k system-locale
+-w /etc/issue.net -p wa -k system-locale
+-w /etc/hosts -p wa -k system-locale
+-w /etc/hostname -p wa -k system-locale
+## old network-scripts file (CIS): not there on Fedora 44, watched if made
+-w /etc/sysconfig/network -p wa -k system-locale
+## the whole folder, profiles in system-connections/ too
+-w /etc/NetworkManager -p wa -k system-locale
+
+## ---- SELinux policy ----
+-w /etc/selinux/ -p wa -k MAC-policy
+-w /usr/share/selinux/ -p wa -k MAC-policy
+-w /var/lib/selinux/ -p wa -k MAC-policy
+
+## ---- Users, groups, authentication ----
+-w /etc/passwd -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/security/opasswd -p wa -k identity
+-w /etc/nsswitch.conf -p wa -k identity
+-w /etc/pam.conf -p wa -k identity
+-w /etc/pam.d/ -p wa -k identity
+
+## ---- sudo ----
+-w /etc/sudoers -p wa -k scope
+-w /etc/sudoers.d/ -p wa -k scope
+-w /var/log/sudo.log -p wa -k sudo_log_file
+
+## ---- Logins and sessions ----
+-w /var/run/faillock -p wa -k logins
+-w /var/log/lastlog -p wa -k logins
+-w /var/lib/lastlog -p wa -k logins
+-w /var/run/utmp -p wa -k session
+-w /var/log/wtmp -p wa -k session
+-w /var/log/btmp -p wa -k session
+
+## ---- Programs run with another user's privileges (setuid) ----
+-a always,exit -F arch=b64 -S execve -C euid!=uid -F auid!=unset -k user_emulation
+-a always,exit -F arch=b32 -S execve -C euid!=uid -F auid!=unset -k user_emulation
+
+## ---- Commands you run as root through sudo ----
+-a always,exit -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=unset -k root_cmds
+-a always,exit -F arch=b32 -S execve -F euid=0 -F auid>=1000 -F auid!=unset -k root_cmds
+
+## ---- Permission / account tools ----
+## usermod under /usr/sbin: Fedora 42+ makes /usr/sbin a link to bin, the kernel
+## follows a link in the folder part of a path rule
+EOF
+  path_rule /usr/bin/chcon perm_chng
+  path_rule /usr/bin/setfacl perm_chng
+  path_rule /usr/bin/chacl perm_chng
+  path_rule /usr/sbin/usermod usermod
+  cat <<'EOF'
+
+## ---- Kernel modules (every load, including by system daemons) ----
+-a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k kernel_modules
+-a always,exit -F arch=b32 -S init_module,finit_module,delete_module -k kernel_modules
+EOF
+  path_rule /usr/bin/kmod kernel_modules
+  cat <<'EOF'
+
+## ---- Mounts by real users (copying to media) ----
+## Flatpak (bubblewrap) and rootless podman mount on every app/container start,
+## so expect a burst of events per launch.
+-a always,exit -F arch=b64 -S mount -F auid>=1000 -F auid!=unset -k mounts
+-a always,exit -F arch=b32 -S mount -F auid>=1000 -F auid!=unset -k mounts
+EOF
+}
+
+# rules_privileged [dir]: content of 55-privileged.rules, one rule per arch for every
+# setuid / setgid file under <dir> (default /usr, one file system; tests pass a temp dir)
+# shellcheck disable=SC2120
+rules_privileged() {
+  local f
+  echo "## setuid/setgid programs under /usr - regenerate after major upgrades"
+  find "${1:-/usr}" -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | sort |
+    while IFS= read -r f; do path_rule "$f" privileged; done
+}
+
 sec_audit_rules() {
   local d=/etc/audit/rules.d n
   # The earlier 50-watch.rules used b64-only rules, which miss 32-bit programs (Steam).
@@ -1006,85 +1120,11 @@ sec_audit_rules() {
 -c
 EOF
 
-  write_file "$d/50-cis-workstation.rules" 0640 <<'EOF'
-## =====================================================================
-## CIS L2 workstation audit rules - file watches (-w) cover 32-bit and
-## 64-bit programs; syscall rules list both arches explicitly.
-## =====================================================================
-
-## ---- Time changes (chronyd excluded: it adjusts the clock all the time) ----
--a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime -F subj_type!=chronyd_t -k time-change
--a always,exit -F arch=b32 -S adjtimex,settimeofday,clock_settime -F subj_type!=chronyd_t -k time-change
--w /etc/localtime -p wa -k time-change
-
-## ---- Hostname and network environment ----
--a always,exit -F arch=b64 -S sethostname,setdomainname -k system-locale
--a always,exit -F arch=b32 -S sethostname,setdomainname -k system-locale
--w /etc/issue -p wa -k system-locale
--w /etc/issue.net -p wa -k system-locale
--w /etc/hosts -p wa -k system-locale
--w /etc/hostname -p wa -k system-locale
--w /etc/NetworkManager -p wa -k system-locale
-
-## ---- SELinux policy ----
--w /etc/selinux -p wa -k MAC-policy
--w /usr/share/selinux -p wa -k MAC-policy
--w /var/lib/selinux -p wa -k MAC-policy
-
-## ---- Users, groups, authentication ----
--w /etc/passwd -p wa -k identity
--w /etc/shadow -p wa -k identity
--w /etc/group -p wa -k identity
--w /etc/gshadow -p wa -k identity
--w /etc/security/opasswd -p wa -k identity
--w /etc/nsswitch.conf -p wa -k identity
--w /etc/pam.conf -p wa -k identity
--w /etc/pam.d -p wa -k identity
-
-## ---- sudo ----
--w /etc/sudoers -p wa -k scope
--w /etc/sudoers.d -p wa -k scope
--w /var/log/sudo.log -p wa -k sudo_log_file
-
-## ---- Logins and sessions ----
--w /var/run/faillock -p wa -k logins
--w /var/log/lastlog -p wa -k logins
--w /var/lib/lastlog -p wa -k logins
--w /var/run/utmp -p wa -k session
--w /var/log/wtmp -p wa -k session
--w /var/log/btmp -p wa -k session
-
-## ---- Programs run with another user's privileges (setuid) ----
--a always,exit -F arch=b64 -C euid!=uid -F auid!=unset -S execve -k user_emulation
--a always,exit -F arch=b32 -C euid!=uid -F auid!=unset -S execve -k user_emulation
-
-## ---- Commands you run as root through sudo ----
--a always,exit -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=unset -k root_cmds
--a always,exit -F arch=b32 -S execve -F euid=0 -F auid>=1000 -F auid!=unset -k root_cmds
-
-## ---- Permission / account tools ----
--a always,exit -F path=/usr/bin/chcon -F perm=x -F auid>=1000 -F auid!=unset -k perm_chng
--a always,exit -F path=/usr/bin/setfacl -F perm=x -F auid>=1000 -F auid!=unset -k perm_chng
--a always,exit -F path=/usr/bin/chacl -F perm=x -F auid>=1000 -F auid!=unset -k perm_chng
--a always,exit -F path=/usr/bin/usermod -F perm=x -F auid>=1000 -F auid!=unset -k usermod
-
-## ---- Kernel modules (every load, including by system daemons) ----
--a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k kernel_modules
--a always,exit -F arch=b32 -S init_module,finit_module,delete_module -k kernel_modules
--a always,exit -F path=/usr/bin/kmod -F perm=x -F auid>=1000 -F auid!=unset -k kernel_modules
-
-## ---- Mounts by real users (copying to media) ----
-## Flatpak (bubblewrap) and rootless podman mount on every app/container start,
-## so expect a burst of events per launch.
--a always,exit -F arch=b64 -S mount -F auid>=1000 -F auid!=unset -k mounts
--a always,exit -F arch=b32 -S mount -F auid>=1000 -F auid!=unset -k mounts
-EOF
-
-  {
-    echo "## setuid/setgid programs under /usr - regenerate after major upgrades"
-    find /usr -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | sort |
-      awk '{print "-a always,exit -F path=" $0 " -F perm=x -F auid>=1000 -F auid!=unset -k privileged"}'
-  } | write_file "$d/55-privileged.rules" 0640
+  if [[ ! -e /usr/sbin/usermod ]]; then
+    warn "no /usr/sbin/usermod: the usermod rule watches nothing here (/usr/sbin not a link to bin?)"
+  fi
+  rules_cis | write_file "$d/50-cis-workstation.rules" 0640
+  rules_privileged | write_file "$d/55-privileged.rules" 0640
 
   if [[ $ENABLE_NOISY_AUDIT == yes ]]; then
     write_file "$d/60-cis-noisy.rules" 0640 <<'EOF'

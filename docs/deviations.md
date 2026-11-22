@@ -75,7 +75,11 @@ compromise: change the password at once (`sudo passwd <user>` works the same day
 | `file_groupownership_sshd_private_key` | Fedora uses group `ssh_keys` by design | - |
 | `sshd_*` | sshd is masked; hardened drop-in present | `systemctl is-enabled sshd` -> `masked` |
 | `accounts_password_pam_unix_authtok` | its check reads `/etc/pam.d/common-password`, a Debian path that Fedora does not have | `grep use_authtok /etc/pam.d/system-auth /etc/pam.d/password-auth` |
-| 16 `audit_rules_*` (execution, mac / networkconfig modification, privileged commands, suid_auid, sysadmin, pam.d) | rules loaded, different text format than the scanner regex | `sudo auditctl -l`, `ausearch -k <key>` |
+| `audit_rules_networkconfig_modification_sethostname`, `..._setdomainname` | the check wants the rule for login users only (`-F auid>=1000 -F auid!=unset`); this one logs every caller, also systemd-hostnamed (hostnamectl, NetworkManager), which has no login uid: broader on purpose | `sudo auditctl -l \| grep sethostname` (no auid field) |
+| `audit_rules_networkconfig_modification_etc_networkmanager_system_connections` | wants its own watch on `/etc/NetworkManager/system-connections/`; `-w /etc/NetworkManager` watches the whole folder tree (a folder watch is recursive: auditctl(8), `-F dir`) | `sudo auditctl -l \| grep NetworkManager` |
+| `journald_disable_forward_to_syslog` | reads only `/etc/systemd/journald.conf`, no drop-ins; the setting is in `journald.conf.d/90-cis.conf` (drop-ins win over the main file). The copy written for the scanner was removed 2026-11-21: one place per setting | `systemd-analyze cat-config systemd/journald.conf \| grep ForwardToSyslog` -> `ForwardToSyslog=no` |
+| `dconf_gnome_disable_user_list` | checks only dconf db `distro`; the key is set and locked in db `gdm`, the one GDM reads for it. The copy in `distro` was removed 2026-11-21 | `DCONF_PROFILE=gdm dconf read /org/gnome/login-screen/disable-user-list` -> `true` |
+| `dconf_db_up_to_date` | a database file older than a keyfile in its folder. On Silverblue both come with the image: 2026-11-18 only `/etc/dconf/db/ibus` was older (seconds) than its `00-upstream-settings` (ibus package, OS update); compiled again it has the same content | `dconf compile /tmp/ibus.db /etc/dconf/db/ibus.d; cmp /tmp/ibus.db /etc/dconf/db/ibus` |
 
 ## Rootless container storage (scan 2026-11-09)
 
@@ -253,7 +257,7 @@ Most FAIL rows are Fedora build options (signed Fedora kernel, not changed here)
   `kernel.warn_limit = 100`, `kernel.oops_limit = 100` (kept journal 2026-08 .. 11: no WARN /
   Oops line at all), `vm.mmap_rnd_bits = 32`, `vm.mmap_rnd_compat_bits = 16` (kernel
   maximum; 32-bit Steam client and games: test after the reboot).
-- Audit rule `io-uring` (b64 + b32 `io_uring_setup`): every hit is a refused try. Rules: 74 on 2026-11-16 (47 + 27 setuid programs), 73 after `guesttools` (2026-11-17: 26).
+- Audit rule `io-uring` (b64 + b32 `io_uring_setup`): every hit is a refused try. Rules: 74 on 2026-11-16 (47 + 27 setuid programs), 73 after `guesttools` (2026-11-17: 26); since 2026-11-21 path rules once per arch: 53 + two per setuid program.
 - kargs: `hash_pointers=always` (hashed %p in every log, also for root),
   `proc_mem.force_override=never` (no write to read-only memory of a process through
   /proc/<pid>/mem; debuggers may break), `module.sig_enforce=1` (signed modules only even

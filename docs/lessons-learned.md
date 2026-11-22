@@ -32,6 +32,20 @@
     + locks), not `gdm.d`; GDM's profile reads both.
   - `journald_disable_forward_to_syslog` reads only `/etc/systemd/journald.conf`, no
     drop-ins. Fedora 44 has no such file (defaults in `/usr/lib/systemd/`).
+  - Copies written only for such a check (2026-11-09 .. 11-21: journald main file, dconf
+    `distro`) are a second place to keep in step; one place per setting, the fail as a
+    false positive with a check command (docs/deviations.md).
+- Audit rules (checked against the OVAL of scap-security-guide 0.1.82, 2026-11-21): every
+  check is a regex over the text of `/etc/audit/rules.d/*.rules`, not `auditctl -l`.
+  - Path rules (`-F path= -F perm=x`) need one line per arch (`-F arch=b32`, `-F
+    arch=b64`, in that place); a path rule without arch matched both arches already, so
+    the events stay the same.
+  - Folder watches need the trailing slash (`-w /etc/selinux/`); auditctl trims it, the
+    kernel gets the same rule (audit-userspace `audit_setup_watch_name`).
+  - `-S execve -C euid!=uid -F auid!=unset` in that order; usermod as `/usr/sbin/usermod`.
+  - `audit_rules_privileged_commands` wants one rule per arch for every setuid / setgid
+    file the scanner finds: with bootc installed (image mode) on `/` only (composefs,
+    `/sysroot` left out), else on every mount without nosuid / noexec, `/var/home` too.
   - `file_permission_user_init_files` = every top-level dotfile of a home (`.gitconfig`,
     `.python_history`, ...), not only the shell init files.
   - `file_permissions_boot_grub2` = every file in `/boot/grub2`, also the empty marker
@@ -193,9 +207,10 @@
 
 - The setuid / setgid list under `/usr` changes with image updates: 28 programs on
   2026-11-03 (`mullvad-exclude` added), 27 on 2026-11-16 (`/usr/bin/userhelper` no longer
-  in the image). `audit-rules` writes one `privileged` rule per program, so a fixed rule
-  count in a checker breaks; run the section again after updates. sectop compares the
-  `privileged` rules with the programs it finds (posture `audit-rules`).
+  in the image). `audit-rules` writes one `privileged` rule per program and arch (two
+  since 2026-11-21), so a fixed rule count in a checker breaks; run the section again
+  after updates. sectop compares the `privileged` rules with the programs it finds
+  (posture `audit-rules`, `setuid_rules = 2`).
 
 ## Audio
 

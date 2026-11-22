@@ -26,6 +26,7 @@ jobs:
       # browsevm viewer relay (beta): bytes / fds in order, busy compositor, limits;
       # netprivacy dispatcher hook with a fake nmcli: new profile fixed, others untouched;
       # harden-workstation.sh run (sourced, test sections only): a file changes only when
-      # its content differs, a failed command stops the run with section / line, summary
+      # its content differs, a failed command stops the run with section / line, summary;
+      # audit rules in the text scap-security-guide 0.1.82 matches, path rules per arch
       - name: tests (python3 -m unittest)
         run: python3 -I -B -m unittest discover -s tests -v
