@@ -95,6 +95,44 @@ class Run(unittest.TestCase):
         self.assertNotIn('Reboot recommended', out)
         self.assertFalse(os.path.exists(self.bk))
 
+    def audit_load(self, check, enabled):
+        """audit_rules_load with stand-ins: augenrules --check says `check`, auditctl -s
+        says `enabled`; (rc, output, calls)"""
+        calls = os.path.join(self.d, 'calls')
+        rc, out = self.bash(f'''
+            augenrules() {{ echo "augenrules $*" >> "{calls}"
+                           [[ ${{1:-}} == --check ]] && echo "/usr/sbin/augenrules: {check}"; return 0; }}
+            auditctl() {{ echo "auditctl $*" >> "{calls}"
+                         case $1 in -s) echo "enabled {enabled}";; -l) seq 60 | sed 's/^/-w \\/x/';; esac; }}
+            sec_audit_rules() {{ audit_rules_load; }}
+            run_sections audit-rules
+            ''')
+        return rc, out, read(calls).splitlines() if os.path.exists(calls) else []
+
+    def test_audit_locked_pending_is_no_change(self):
+        # 2026-11-22 host: rules.d rewritten while locked; augenrules writes nothing then
+        # (immutable mode), so a second run must not count audit.rules as changed
+        rc, out, calls = self.audit_load('Rules have changed and should be updated', 2)
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r'audit-rules +no change')
+        self.assertIn('loads at the next boot', out)
+        self.assertEqual([c for c in calls if c.startswith('augenrules')], ['augenrules --check'])
+        self.assertIn('Backups: none', out)
+
+    def test_audit_unlocked_pending_loads(self):
+        rc, out, calls = self.audit_load('Rules have changed and should be updated', 1)
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r'audit-rules +1 change')
+        self.assertIn('augenrules --load', calls)
+        self.assertIn('audit rules loaded in kernel: 60', out)
+
+    def test_audit_same_no_load(self):
+        rc, out, calls = self.audit_load('No change', 2)
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r'audit-rules +no change')
+        self.assertIn('rules.d = /etc/audit/audit.rules', out)
+        self.assertEqual(calls, ['augenrules --check'])
+
     def test_failed_command_in_substitution_stops_with_place(self):
         # the H3 case: a missing command inside $(...) with 2>/dev/null used to end the
         # run without a word

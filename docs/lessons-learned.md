@@ -9,6 +9,10 @@
 - `-F arch=b64`-only rules miss 32-bit programs (Steam). Use `-w` for file watches or list both arches.
 - `auditctl -R` stops at the first failing rule -> put `-c` in `01-continue.rules`.
 - `augenrules` always moves `-D` first and `-e` last.
+- While the rules are locked (`-e 2`), `augenrules` writes nothing ("immutable mode -
+  exiting with no changes", audit 4); `--check` still says "Rules have changed". At boot
+  audit-rules.service runs `augenrules --load`, so rules.d is what loads. Counting
+  audit.rules as changed then is wrong (2026-11-22: run 2 counted it again).
 - `ausearch -k <key>` also returns the `CONFIG_CHANGE` events of `auditctl` adding the
   rule (same key), and `-m SYSCALL` still shows them (auditctl's own syscall record).
   Filter on the syscall: `ausearch -k af-alg -sc socket`.

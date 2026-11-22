@@ -78,8 +78,10 @@ sudo rpm-ostree kargs --delete=init_on_free=1 --delete=iommu.strict=1
 sudo rpm-ostree kargs --delete=hash_pointers=always --delete=proc_mem.force_override=never \
   --delete=module.sig_enforce=1 --delete=intel_iommu=on --delete=debugfs=off \
   --delete=bdev_allow_write_mounted=0                                  # then reboot
-sudo rm /etc/audit/rules.d/70-io-uring.rules && sudo augenrules   # loads at the next boot
-sudo cp /var/backups/hardening/<time>/etc/audit/rules.d/5*.rules /etc/audit/rules.d/ && sudo augenrules
+sudo rm /etc/audit/rules.d/70-io-uring.rules     # loads at the next boot (rules.d is what
+                                                 # audit-rules.service builds and loads; while
+                                                 # locked, augenrules changes nothing)
+sudo cp /var/backups/hardening/<time>/etc/audit/rules.d/5*.rules /etc/audit/rules.d/
                                                  # audit rule text before the scanner's form (2026-11-21):
                                                  # the same rules, path rules without arch; next boot
 sudo rm /boot/grub2/user.cfg                     # GRUB password off

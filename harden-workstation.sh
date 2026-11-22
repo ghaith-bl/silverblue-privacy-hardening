@@ -1031,7 +1031,7 @@ rules_cis() {
 -w /etc/issue.net -p wa -k system-locale
 -w /etc/hosts -p wa -k system-locale
 -w /etc/hostname -p wa -k system-locale
-## old network-scripts file (CIS): not there on Fedora 44, watched if made
+## old network-scripts file (CIS); on Fedora 44 made by the installer
 -w /etc/sysconfig/network -p wa -k system-locale
 ## the whole folder, profiles in system-connections/ too
 -w /etc/NetworkManager -p wa -k system-locale
@@ -1108,7 +1108,7 @@ rules_privileged() {
 }
 
 sec_audit_rules() {
-  local d=/etc/audit/rules.d n
+  local d=/etc/audit/rules.d
   # The earlier 50-watch.rules used b64-only rules, which miss 32-bit programs (Steam).
   if [[ -e $d/50-watch.rules ]]; then
     backup "$d/50-watch.rules"; rm -f "$d/50-watch.rules"; log "removed old 50-watch.rules (backed up)"
@@ -1176,17 +1176,24 @@ EOF
 EOF
 
   set_mode 0640 "$d"/*.rules
-  # audit.rules (built from rules.d by augenrules, loaded at boot) already up to date and
-  # nothing changed here: no rebuild, no load
-  if (( $(section_changes) == 0 )) && [[ $(augenrules --check 2>&1) == *"No change"* ]]; then
-    log "audit rules: no change (rules.d = /etc/audit/audit.rules)"
+  audit_rules_load
+}
+
+# audit_rules_load: build /etc/audit/audit.rules from rules.d and load it, unless locked
+audit_rules_load() {
+  local n
+  if [[ $(augenrules --check 2>&1) == *"No change"* ]]; then
+    # audit.rules = rules.d: nothing to build, nothing to load
+    (( $(section_changes) )) || log "audit rules: no change (rules.d = /etc/audit/audit.rules)"
     return 0
   fi
   if [[ $(auditctl -s | awk '$1 == "enabled" {print $2}') == 2 ]]; then
-    # Locked: the kernel refuses every change. Write audit.rules, load it at boot.
-    if ! augenrules >/dev/null; then warn "augenrules reported an error - check the files in $d"; fi
-    changed "/etc/audit/audit.rules"
-    log "audit rules are locked (-e 2): the new rules load at the next reboot"
+    # Locked (-e 2): the kernel refuses every change, and augenrules leaves audit.rules as
+    # it is ("immutable mode - exiting with no changes", audit 4). At boot
+    # audit-rules.service runs `augenrules --load`: audit.rules is built from rules.d, then
+    # loaded. Nothing changes now, so no change is counted (2026-11-22, host: run 2 counted
+    # audit.rules again).
+    log "audit rules are locked (-e 2): rules.d differs from the loaded rules; it loads at the next boot (audit-rules.service builds audit.rules from it)"
     return 0
   fi
   if ! augenrules --load >/dev/null; then
@@ -1195,7 +1202,7 @@ EOF
   changed "/etc/audit/audit.rules (loaded)"
   n=$(auditctl -l | grep -vc '^No rules' || true)
   log "audit rules loaded in kernel: $n"
-  if (( n < 40 )); then warn "fewer rules than expected - check the files in $d"; fi
+  if (( n < 40 )); then warn "fewer rules than expected - check the files in /etc/audit/rules.d"; fi
   if [[ $MAKE_AUDIT_IMMUTABLE == yes ]]; then log "audit rules locked now (-e 2): next change needs a reboot"; fi
 }
 
