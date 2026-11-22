@@ -13,6 +13,13 @@
   exiting with no changes", audit 4); `--check` still says "Rules have changed". At boot
   audit-rules.service runs `augenrules --load`, so rules.d is what loads. Counting
   audit.rules as changed then is wrong (2026-11-22: run 2 counted it again).
+- `auditctl -l` lists a path rule without arch as `-S all ... -F perm=x`, the same rule with
+  `-F arch=bNN` as `-S execve,execveat`: libaudit adds the syscalls of the perm when an arch
+  is set, and `perm=x` matches only the execve class in the kernel, so both match the same
+  events (with an arch: cheaper). Compare old and new listings with that mapping
+  (2026-11-22: a compare without it listed all 31 path rules as changed).
+- The first matching exit rule writes the event: a program run as root through sudo gets
+  the `root_cmds` key, not the key of its own path rule.
 - `ausearch -k <key>` also returns the `CONFIG_CHANGE` events of `auditctl` adding the
   rule (same key), and `-m SYSCALL` still shows them (auditctl's own syscall record).
   Filter on the syscall: `ausearch -k af-alg -sc socket`.
@@ -58,6 +65,14 @@
     fails on Fedora whatever `system-auth` says.
   - Unowned / world-writable checks walk `/var/home` fully: old app data (Waydroid's
     Android uids) and rootless container storage (subuids) show up there.
+- Tailoring (openscap 1.4.6 source, `xccdf_policy.c`, `oval_agent.c`): a `set-value` in the
+  tailored profile wins over the profile's `refine-value` (any value; a selector only picks
+  the listed ones). `autotailor` writes the same XML; the usage text is in
+  `compliance/README.md` because an XML comment must not contain `--` (a usage line with
+  `--tailoring-file` made the file unreadable).
+- `sshd_*` checks want the value in every file of `/etc/ssh/sshd_config.d/`; sshd uses the
+  first value it reads, so Fedora's `50-redhat.conf` (`GSSAPIAuthentication yes`) fails
+  `sshd_disable_gssapi_auth` although `40-cis.conf` (read first) says `no`.
 - Cron dir modes set once (0700) were back at 0755 at a later scan, `/etc/crontab` kept
   0600: set them at every boot (tmpfiles.d `z` lines), same for `/boot/grub2`.
 

@@ -1,40 +1,46 @@
 # Deviations from CIS Fedora L2 Workstation
 
 Rules intentionally **not** applied (or applied differently), with the reason.
-Input for an OpenSCAP tailoring file.
+Column `Tailoring`: what [compliance/tailoring.xml](../compliance/tailoring.xml) does with the
+rule: `unselect` (not scanned), `value <variable>=<value>` (scanned with my value instead of
+the profile's), `-` (scanned as in the profile). `tests/test_tailoring.py` checks both ways:
+every row against the file, every entry of the file against a row.
+Review: every row by 2027-05-22, earlier after a Fedora major upgrade or a new
+scap-security-guide version (both change what the scanner reads).
 
 ## Would break this machine
 
-| Rule | Decision | Reason |
-|------|----------|--------|
-| `kernel_module_overlayfs_disabled` | skip | Silverblue composefs is built on overlayfs + EROFS; Podman/toolbox also need it |
-| `xwayland_disabled` | skip | Steam client and most games run on X11 via XWayland |
-| `sysctl_net_ipv4_ip_forward`, `..._conf_all_forwarding`, `..._conf_default_forwarding` | skip | libvirt NAT (`virbr0`) and rootful Podman need IPv4 forwarding |
-| `sysctl_net_ipv4_conf_all_rp_filter`, `..._default_rp_filter` | set `2` (loose) | strict mode can drop WireGuard traffic; NetworkManager itself switches to loose on multihomed hosts |
-| `package_dnsmasq_removed` | skip | libvirt default network DHCP/DNS |
-| `package_httpd_removed`, `package_rsync_removed` | skip | part of the base image, not running, not removable without `rpm-ostree override remove` |
-| `kernel_module_usb-storage_disabled` | skip (option) | USB drives still needed; `DISABLE_USB_STORAGE=yes` to apply |
+| Rule | Decision | Reason | Tailoring |
+|------|----------|--------|-----------|
+| `kernel_module_overlayfs_disabled` | skip | Silverblue composefs is built on overlayfs + EROFS; Podman/toolbox also need it | unselect |
+| `xwayland_disabled` | skip | Steam client and most games run on X11 via XWayland | unselect |
+| `sysctl_net_ipv4_ip_forward`, `sysctl_net_ipv4_conf_all_forwarding`, `sysctl_net_ipv4_conf_default_forwarding` | skip | libvirt NAT (`virbr0`) and rootful Podman need IPv4 forwarding | unselect |
+| `sysctl_net_ipv4_conf_all_rp_filter`, `sysctl_net_ipv4_conf_default_rp_filter` | set `2` (loose) | strict mode can drop WireGuard traffic; NetworkManager itself switches to loose on multihomed hosts | value `sysctl_net_ipv4_conf_all_rp_filter_value=2`, `sysctl_net_ipv4_conf_default_rp_filter_value=2` |
+| `package_dnsmasq_removed` | skip | libvirt default network DHCP/DNS | unselect |
+| `package_httpd_removed`, `package_rsync_removed` | skip | part of the base image, not running, not removable without `rpm-ostree override remove` | unselect |
+| `kernel_module_usb-storage_disabled` | skip (option) | USB drives still needed; `DISABLE_USB_STORAGE=yes` to apply | unselect |
 
 ## Not useful on a personal device
 
-| Rule | Decision | Reason |
-|------|----------|--------|
-| `accounts_tmout` | skip | GNOME idle lock (15 min, locked) covers it |
-| `banner_etc_issue_cis`, `banner_etc_issue_net_cis`, `dconf_gnome_banner_enabled`, `dconf_gnome_login_banner_text`, `sshd_enable_warning_banner_net` | skip | legal banners - value in organisations, not on a personal device |
-| `package_systemd-journal-remote_installed` | skip | needs a log server on a second device; none now |
-| `accounts_passwords_pam_faillock_even_deny_root_or_root_unlock_time` | skip | root account is locked; `su` restricted to an empty group |
-| `ensure_root_password_configured` | skip | root is locked; emergency shell refuses access instead of opening unauthenticated |
-| `service_bluetooth_disabled` | skip | service already disabled manually; masking optional |
+| Rule | Decision | Reason | Tailoring |
+|------|----------|--------|-----------|
+| `accounts_tmout` | skip | GNOME idle lock (15 min, locked) covers it | unselect |
+| `banner_etc_issue_cis`, `banner_etc_issue_net_cis`, `dconf_gnome_banner_enabled`, `dconf_gnome_login_banner_text`, `sshd_enable_warning_banner_net` | skip | legal banners - value in organisations, not on a personal device | unselect |
+| `sshd_limit_user_access` | skip while the SSH server is masked | `SSH_SERVER=off` (default): nobody logs in over SSH, so an `AllowUsers` / `AllowGroups` list would guard nothing. An allow list is planned for `SSH_SERVER=on` | unselect |
+| `package_systemd-journal-remote_installed` | skip | needs a log server on a second device; none now | unselect |
+| `accounts_passwords_pam_faillock_even_deny_root_or_root_unlock_time` | skip | root account is locked; `su` restricted to an empty group | unselect |
+| `ensure_root_password_configured` | skip | root is locked; emergency shell refuses access instead of opening unauthenticated | unselect |
+| `service_bluetooth_disabled` | skip | service already disabled manually; masking optional | unselect |
 
 ## Two accounts (accounts section, 2026-11-05)
 
-| Rule | Decision | Reason |
-|------|----------|--------|
-| `account_disable_post_pw_expiration` | skip | locks an account some days after its password expired: root is locked and the admin is the only sudo account, so an expired admin would mean no sudo at all (recovery from a live USB) |
-| admin password | memorized + offline copy (paper / phone password manager), never in storage the daily user opens, never typed in GNOME | a keylogger or a password manager in the daily session must not get it |
-| admin home lock (not CIS, 2026-11-18) | shell start files = `accounts/admin.*` (PATH only from root-owned dirs, no `~/.bashrc.d`), `chattr +i`; the top of the home, `.config`, `.local`, `.local/share` `chattr +i`, also `.config/systemd`, `.local/share/systemd` (timer stamps), `.local/share/flatpak` if present (no `user/` units, no `exports/` on `XDG_DATA_DIRS`); `.profile`, `.bash_login`, `.bash_completion`, `.i18n`, `.config/bash_completion` removed (backup first) | scripts from the daily session run as the admin (after review in `tools/admin-run.sh`); one that got through could plant an alias, a function or a PATH entry for `sudo` and catch the password at the next sudo. Bash reads the start files, `/etc/profile.d/lang.sh` reads `~/.i18n`, bash-completion sources `~/.bash_completion` and `~/.config/bash_completion` and loads completions from `~/.local/share/bash-completion`: none can be planted now (nothing new at those levels). Cost: the admin creates nothing new there and changes its shell files only with `sudo chattr -i`; a tool that wants a new history / config file there (less, nano) cannot save it; a full SELinux relabel cannot relabel the locked items (labeled when locked). Folders already inside stay writable: `tools/check-accounts.sh` lists them and fails on known places that run code (`user/` units, completions, git config, flatpak `exports/`). Not covered: a process the script left running until logout / reboot, the admin's own clones ([THREAT_MODEL.md](THREAT_MODEL.md), planned) |
-| `accounts_user_dot_user_ownership`, `accounts_user_dot_group_ownership` | applied: the admin's start files stay owned by the admin and its group (CIS 7.2.9) | root as owner would add nothing: in a home the admin owns, it can rename a root-owned file and put its own in its place; `chattr +i` blocks write, rename, delete and chmod even for the owner (tested 2026-11-18) |
-| GDM login methods (not CIS, 2026-11-18) | password only: `enable-switchable-authentication`, `enable-passkey-authentication`, `enable-web-authentication` (GDM 50; 51 dropped the last two), `enable-smartcard-authentication` false and locked in dconf `gdm`; `enable-fingerprint-authentication` too with `FINGERPRINT=disable` | only `gdm-password` refuses the admin; `gdm-switchable-auth`, `gdm-smartcard`, `gdm-fingerprint` use authselect stubs (`pam_debug auth=authinfo_unavail`) that refuse every user, `gdm-autologin` is unused (no automatic login in `/etc/gdm/custom.conf`): `tools/check-accounts.sh` checks each. The locked keys keep GDM off those services if a later authselect profile gives them a real stack. Cost: none here (no reader, no smart card, no passkey login) |
+| Rule | Decision | Reason | Tailoring |
+|------|----------|--------|-----------|
+| `account_disable_post_pw_expiration` | skip | locks an account some days after its password expired: root is locked and the admin is the only sudo account, so an expired admin would mean no sudo at all (recovery from a live USB) | unselect |
+| admin password | memorized + offline copy (paper / phone password manager), never in storage the daily user opens, never typed in GNOME | a keylogger or a password manager in the daily session must not get it | - |
+| admin home lock (not CIS, 2026-11-18) | shell start files = `accounts/admin.*` (PATH only from root-owned dirs, no `~/.bashrc.d`), `chattr +i`; the top of the home, `.config`, `.local`, `.local/share` `chattr +i`, also `.config/systemd`, `.local/share/systemd` (timer stamps), `.local/share/flatpak` if present (no `user/` units, no `exports/` on `XDG_DATA_DIRS`); `.profile`, `.bash_login`, `.bash_completion`, `.i18n`, `.config/bash_completion` removed (backup first) | scripts from the daily session run as the admin (after review in `tools/admin-run.sh`); one that got through could plant an alias, a function or a PATH entry for `sudo` and catch the password at the next sudo. Bash reads the start files, `/etc/profile.d/lang.sh` reads `~/.i18n`, bash-completion sources `~/.bash_completion` and `~/.config/bash_completion` and loads completions from `~/.local/share/bash-completion`: none can be planted now (nothing new at those levels). Cost: the admin creates nothing new there and changes its shell files only with `sudo chattr -i`; a tool that wants a new history / config file there (less, nano) cannot save it; a full SELinux relabel cannot relabel the locked items (labeled when locked). Folders already inside stay writable: `tools/check-accounts.sh` lists them and fails on known places that run code (`user/` units, completions, git config, flatpak `exports/`). Not covered: a process the script left running until logout / reboot, the admin's own clones ([THREAT_MODEL.md](THREAT_MODEL.md), planned) | - |
+| `accounts_user_dot_user_ownership`, `accounts_user_dot_group_ownership` | applied: the admin's start files stay owned by the admin and its group (CIS 7.2.9) | root as owner would add nothing: in a home the admin owns, it can rename a root-owned file and put its own in its place; `chattr +i` blocks write, rename, delete and chmod even for the owner (tested 2026-11-18) | - |
+| GDM login methods (not CIS, 2026-11-18) | password only: `enable-switchable-authentication`, `enable-passkey-authentication`, `enable-web-authentication` (GDM 50; 51 dropped the last two), `enable-smartcard-authentication` false and locked in dconf `gdm`; `enable-fingerprint-authentication` too with `FINGERPRINT=disable` | only `gdm-password` refuses the admin; `gdm-switchable-auth`, `gdm-smartcard`, `gdm-fingerprint` use authselect stubs (`pam_debug auth=authinfo_unavail`) that refuse every user, `gdm-autologin` is unused (no automatic login in `/etc/gdm/custom.conf`): `tools/check-accounts.sh` checks each. The locked keys keep GDM off those services if a later authselect profile gives them a real stack. Cost: none here (no reader, no smart card, no passkey login) | - |
 
 ## Passwords: CIS on purpose (decision 2026-11-17)
 
@@ -42,50 +48,51 @@ NIST SP 800-63B-4: no periodic change, no composition rules, 15 chars for a pass
 alone. This repo follows CIS on purpose (the benchmark is the measure). On any sign of
 compromise: change the password at once (`sudo passwd <user>` works the same day too).
 
-| Rule | Decision | Reason |
-|------|----------|--------|
-| `accounts_password_pam_minlen` | `15` (`pam`; CIS `14`) | NIST SP 800-63B-4 minimum for a password used alone; checked at the next change, not on the passwords set now |
-| `accounts_password_pam_minclass` | `4` (`pam`) | CIS; NIST: no composition rules |
-| `accounts_maximum_age_login_defs`, `accounts_password_set_max_life_existing` | applied: 365 days, warning 14 (`pwage`) | CIS; NIST: no periodic change. I change both passwords about every six months anyway; the max only catches a forgotten change |
-| `accounts_minimum_age_login_defs`, `accounts_password_set_min_life_existing` | applied: 1 day (`pwage`, since 2026-11-18) | CIS; without it pwhistory (24) is cosmetic: 24 changes in a row bring the old password back. Cost: no second change of my own password the same day; root can (`sudo passwd <user>`) |
+| Rule | Decision | Reason | Tailoring |
+|------|----------|--------|-----------|
+| `accounts_password_pam_minlen` | `15` (`pam`; CIS `14`) | NIST SP 800-63B-4 minimum for a password used alone; checked at the next change, not on the passwords set now | value `var_password_pam_minlen=15` |
+| `accounts_password_pam_minclass` | `4` (`pam`) | CIS; NIST: no composition rules | - |
+| `accounts_maximum_age_login_defs`, `accounts_password_set_max_life_existing` | applied: 365 days, warning 14 (`pwage`) | CIS; NIST: no periodic change. I change both passwords about every six months anyway; the max only catches a forgotten change | - |
+| `accounts_minimum_age_login_defs`, `accounts_password_set_min_life_existing` | applied: 1 day (`pwage`, since 2026-11-18) | CIS; without it pwhistory (24) is cosmetic: 24 changes in a row bring the old password back. Cost: no second change of my own password the same day; root can (`sudo passwd <user>`) | - |
 
 ## Changed on purpose
 
-| Rule | Decision | Reason |
-|------|----------|--------|
-| `sysctl_kernel_kptr_restrict` | set `2` | stricter than the CIS value `1` (hidden from root too) |
-| `sysctl_kernel_yama_ptrace_scope` | set `3` (decision `PTRACE_SCOPE`, 2026-11-16; `2` since 2026-10-30) | no attach for anyone, root included (KSPP); `2` was admin-only attach, idea from secureblue. CIS RHEL 9 v3.0.0 accepts `1`, `2` or `3` and recommends `2`; RHEL 9 STIG (V-257811) wants exactly `1`: finding there. Scanner fails if its profile value is `1`. Why 3: closes the easiest way for root (or malware that got root) to read or change a running program's memory (ptrace, /proc/<pid>/mem, process_vm_readv: keyring, browser secrets) and makes the rest harder; root still has other ways (run as the user and ask its Secret Service, eBPF, uprobes, change the sysctl file and reboot): against root this setup detects, it does not prevent (THREAT_MODEL.md). Programs that only read /proc (sectop, ps, btop, osquery, auditd) are not affected: Yama checks attach only. Cost: `gdb` / `strace` / `ltrace` / CRIU (`podman container checkpoint`) do not work, not even with sudo: use them in the lab VMs (own kernel; toolbox shares this one). Anti-cheat games need ptrace (none here). One-way until reboot. Undo: `PTRACE_SCOPE=2`, sysctl section, reboot |
-| `auditd_data_disk_full_action`, `auditd_data_retention_admin_space_left_action` | `SUSPEND` | CIS `HALT`/`SINGLE` would stop a laptop when the disk fills |
-| `auditd_data_retention_space_left_action` | `SYSLOG` | no local MTA for `EMAIL` |
-| `auditd_data_retention_max_log_file_action` | keep `ROTATE` | CIS `KEEP_LOGS` has no limit; `/var` also holds `/var/home` |
-| `auditd_data_retention_max_log_file`, `auditd_data_retention_num_logs` | `32` MiB x `40` files | ring >= 1 week (DISA STIG RHEL 9 V-258155). 2026-10-20: measured 2.3 MiB/h with sectop mostly closed, estimated 6.6 MiB/h with sectop polling as root every 6 s (before its privilege split; sectop runs no root commands now) |
-| `audit_rules_dac_modification_*` (14), `audit_rules_file_deletion_events_*` (5), `audit_rules_unsuccessful_file_modification_*` (5) | off by default | thousands of events/hour from Steam and Brave caches; `ENABLE_NOISY_AUDIT=yes` to apply |
-| `audit_rules_time_clock_settime` | `subj_type!=chronyd_t` filter | chronyd adjusts the clock constantly |
-| `accounts_password_pam_modules_in_authselect_profile` | keep Fedora's authselect profile `local` | the rule wants a custom profile copied from `local`; the PAM lines would be the same (faillock, pwhistory, pwquality: features of `local`, set by the `pam` section). A copy gets no fixes from Fedora's updates of `local`, and a broken custom profile can lock out the only sudo account (root is locked). Decision 2026-11-09 |
+| Rule | Decision | Reason | Tailoring |
+|------|----------|--------|-----------|
+| `sysctl_kernel_kptr_restrict` | set `2` | stricter than the CIS value `1` (hidden from root too) | value `sysctl_kernel_kptr_restrict_value=2` |
+| `sysctl_kernel_yama_ptrace_scope` | set `3` (decision `PTRACE_SCOPE`, 2026-11-16; `2` since 2026-10-30) | no attach for anyone, root included (KSPP); `2` was admin-only attach, idea from secureblue. CIS RHEL 9 v3.0.0 accepts `1`, `2` or `3` and recommends `2`; RHEL 9 STIG (V-257811) wants exactly `1`: finding there. Scanner fails if its profile value is `1`. Why 3: closes the easiest way for root (or malware that got root) to read or change a running program's memory (ptrace, /proc/<pid>/mem, process_vm_readv: keyring, browser secrets) and makes the rest harder; root still has other ways (run as the user and ask its Secret Service, eBPF, uprobes, change the sysctl file and reboot): against root this setup detects, it does not prevent (THREAT_MODEL.md). Programs that only read /proc (sectop, ps, btop, osquery, auditd) are not affected: Yama checks attach only. Cost: `gdb` / `strace` / `ltrace` / CRIU (`podman container checkpoint`) do not work, not even with sudo: use them in the lab VMs (own kernel; toolbox shares this one). Anti-cheat games need ptrace (none here). One-way until reboot. Undo: `PTRACE_SCOPE=2`, sysctl section, reboot. The profile wants exactly `1` (no variable to set) | unselect |
+| `auditd_data_disk_full_action`, `auditd_data_retention_admin_space_left_action` | `SUSPEND` | CIS `HALT`/`SINGLE` would stop a laptop when the disk fills | value `var_auditd_disk_full_action=suspend`, `var_auditd_admin_space_left_action=suspend` |
+| `auditd_data_retention_space_left_action`, `auditd_data_disk_error_action` | `SYSLOG` | no local MTA for `EMAIL`; a disk error is logged, the laptop keeps running (`SYSLOG` is one of the profile's choices for disk errors) | value `var_auditd_space_left_action=syslog`, `var_auditd_disk_error_action=syslog` |
+| `auditd_data_retention_max_log_file_action` | keep `ROTATE` | CIS `KEEP_LOGS` has no limit; `/var` also holds `/var/home` | value `var_auditd_max_log_file_action=rotate` |
+| `auditd_data_retention_max_log_file`, `auditd_data_retention_num_logs` | `32` MiB x `40` files | ring >= 1 week (DISA STIG RHEL 9 V-258155). 2026-10-20: measured 2.3 MiB/h with sectop mostly closed, estimated 6.6 MiB/h with sectop polling as root every 6 s (before its privilege split; sectop runs no root commands now) | value `var_auditd_max_log_file=32` |
+| `audit_rules_dac_modification_*` (14), `audit_rules_file_deletion_events_*` (5), `audit_rules_unsuccessful_file_modification_*` (5) | off by default | thousands of events/hour from Steam and Brave caches; `ENABLE_NOISY_AUDIT=yes` to apply | unselect |
+| `audit_rules_time_clock_settime` | `subj_type!=chronyd_t` filter | chronyd adjusts the clock constantly | unselect |
+| `accounts_password_pam_modules_in_authselect_profile` | keep Fedora's authselect profile `local` | the rule wants a custom profile copied from `local`; the PAM lines would be the same (faillock, pwhistory, pwquality: features of `local`, set by the `pam` section). A copy gets no fixes from Fedora's updates of `local`, and a broken custom profile can lock out the only sudo account (root is locked). Decision 2026-11-09 | unselect |
+| `sshd_set_keepalive` | `ClientAliveCountMax 3` (`sshd` section, server masked) | with `ClientAliveInterval 15`: a dead client is dropped after about 45 s; the profile value `1` drops it after one missed reply | value `var_sshd_set_keepalive=3` |
 
 ## Scanner false positives on Silverblue (verified manually)
 
-| Rule | Why it fails | Verification |
-|------|--------------|--------------|
-| `grub2_audit_argument`, `grub2_audit_backlog_limit_argument` | checks GRUB files; Silverblue sets kargs via `rpm-ostree kargs` | `grep -o 'audit[^ ]*' /proc/cmdline` |
-| `audit_rules_kernel_module_loading_create`, `..._query` | `create_module` / `query_module` do not exist on x86_64 | - |
-| `ensure_fedora_gpgkey_installed` | ostree verifies commits with its own remote keys | `grep -r gpg-verify /etc/ostree/remotes.d/` |
-| `package_cron_installed` | `cronie` is layered | `rpm -q cronie` |
-| `sysctl_fs_suid_dumpable` | another value in `/usr/lib/sysctl.d/`; ours (`90-hardening.conf`) loads last. `yama_ptrace_scope`: see Changed on purpose | `sysctl fs.suid_dumpable` -> `0` |
-| `file_groupownership_sshd_private_key` | Fedora uses group `ssh_keys` by design | - |
-| `sshd_*` | sshd is masked; hardened drop-in present | `systemctl is-enabled sshd` -> `masked` |
-| `accounts_password_pam_unix_authtok` | its check reads `/etc/pam.d/common-password`, a Debian path that Fedora does not have | `grep use_authtok /etc/pam.d/system-auth /etc/pam.d/password-auth` |
-| `audit_rules_networkconfig_modification_sethostname`, `..._setdomainname` | the check wants the rule for login users only (`-F auid>=1000 -F auid!=unset`); this one logs every caller, also systemd-hostnamed (hostnamectl, NetworkManager), which has no login uid: broader on purpose | `sudo auditctl -l \| grep sethostname` (no auid field) |
-| `audit_rules_networkconfig_modification_etc_networkmanager_system_connections` | wants its own watch on `/etc/NetworkManager/system-connections/`; `-w /etc/NetworkManager` watches the whole folder tree (a folder watch is recursive: auditctl(8), `-F dir`) | `sudo auditctl -l \| grep NetworkManager` |
-| `journald_disable_forward_to_syslog` | reads only `/etc/systemd/journald.conf`, no drop-ins; the setting is in `journald.conf.d/90-cis.conf` (drop-ins win over the main file). The copy written for the scanner was removed 2026-11-21: one place per setting | `systemd-analyze cat-config systemd/journald.conf \| grep ForwardToSyslog` -> `ForwardToSyslog=no` |
-| `dconf_gnome_disable_user_list` | checks only dconf db `distro`; the key is set and locked in db `gdm`, the one GDM reads for it. The copy in `distro` was removed 2026-11-21 | `DCONF_PROFILE=gdm dconf read /org/gnome/login-screen/disable-user-list` -> `true` |
-| `dconf_db_up_to_date` | a database file older than a keyfile in its folder. On Silverblue both come with the image: 2026-11-18 only `/etc/dconf/db/ibus` was older (seconds) than its `00-upstream-settings` (ibus package, OS update); compiled again it has the same content | `dconf compile /tmp/ibus.db /etc/dconf/db/ibus.d; cmp /tmp/ibus.db /etc/dconf/db/ibus` |
+| Rule | Why it fails | Verification | Tailoring |
+|------|--------------|--------------|-----------|
+| `grub2_audit_argument`, `grub2_audit_backlog_limit_argument` | checks GRUB files; Silverblue sets kargs via `rpm-ostree kargs` | `grep -o 'audit[^ ]*' /proc/cmdline` | unselect |
+| `audit_rules_kernel_module_loading_create`, `audit_rules_kernel_module_loading_query` | `create_module` / `query_module` do not exist on x86_64 | - | unselect |
+| `ensure_fedora_gpgkey_installed` | ostree verifies commits with its own remote keys | `grep -r gpg-verify /etc/ostree/remotes.d/` | unselect |
+| `package_cron_installed` | `cronie` is layered | `rpm -q cronie` | unselect |
+| `sysctl_fs_suid_dumpable` | another value in `/usr/lib/sysctl.d/`; ours (`90-hardening.conf`) loads last. `yama_ptrace_scope`: see Changed on purpose | `sysctl fs.suid_dumpable` -> `0` | unselect |
+| `file_groupownership_sshd_private_key` | Fedora uses group `ssh_keys` by design | - | unselect |
+| `sshd_disable_gssapi_auth` | wants `no` in every file of `/etc/ssh/sshd_config.d/`; Fedora's `50-redhat.conf` has `GSSAPIAuthentication yes`. sshd takes the first value it reads: `40-cis.conf` sorts first (`no`). The server is masked anyway | `sudo grep -i gssapiauthentication /etc/ssh/sshd_config.d/*.conf` (first file wins) | unselect |
+| `accounts_password_pam_unix_authtok` | its check reads `/etc/pam.d/common-password`, a Debian path that Fedora does not have | `grep use_authtok /etc/pam.d/system-auth /etc/pam.d/password-auth` | unselect |
+| `audit_rules_networkconfig_modification_sethostname`, `audit_rules_networkconfig_modification_setdomainname` | the check wants the rule for login users only (`-F auid>=1000 -F auid!=unset`); this one logs every caller, also systemd-hostnamed (hostnamectl, NetworkManager), which has no login uid: broader on purpose | `sudo auditctl -l \| grep sethostname` (no auid field) | unselect |
+| `audit_rules_networkconfig_modification_etc_networkmanager_system_connections` | wants its own watch on `/etc/NetworkManager/system-connections/`; `-w /etc/NetworkManager` watches the whole folder tree (a folder watch is recursive: auditctl(8), `-F dir`) | `sudo auditctl -l \| grep NetworkManager` | unselect |
+| `journald_disable_forward_to_syslog` | reads only `/etc/systemd/journald.conf`, no drop-ins; the setting is in `journald.conf.d/90-cis.conf` (drop-ins win over the main file). The copy written for the scanner was removed 2026-11-21: one place per setting | `systemd-analyze cat-config systemd/journald.conf \| grep ForwardToSyslog` -> `ForwardToSyslog=no` | unselect |
+| `dconf_gnome_disable_user_list` | checks only dconf db `distro`; the key is set and locked in db `gdm`, the one GDM reads for it. The copy in `distro` was removed 2026-11-21 | `DCONF_PROFILE=gdm dconf read /org/gnome/login-screen/disable-user-list` -> `true` | unselect |
+| `dconf_db_up_to_date` | a database file older than a keyfile in its folder. On Silverblue both come with the image: 2026-11-18 only `/etc/dconf/db/ibus` was older (seconds) than its `00-upstream-settings` (ibus package, OS update); compiled again it has the same content | `dconf compile /tmp/ibus.db /etc/dconf/db/ibus.d; cmp /tmp/ibus.db /etc/dconf/db/ibus` | unselect |
 
 ## Rootless container storage (scan 2026-11-09)
 
-| Rule | Decision | Reason |
-|------|----------|--------|
-| `no_files_or_dirs_unowned_by_user`, `no_files_or_dirs_ungroupowned`, `file_permissions_unauthorized_world_writable`, `dir_perms_world_writable_sticky_bits` | skip | every hit is in the daily user's home: the rootless Podman volume of my kind lab (node `kind-control-plane`). Inside, files belong to subordinate uids / gids (no passwd entry) and keep the container's own modes (world-writable dirs of the node image). The home is 0700: no other user reaches them. The scanner walks `/var/home` fully. Gone with the lab: `kind delete cluster` |
+| Rule | Decision | Reason | Tailoring |
+|------|----------|--------|-----------|
+| `no_files_or_dirs_unowned_by_user`, `no_files_or_dirs_ungroupowned`, `file_permissions_unauthorized_world_writable`, `dir_perms_world_writable_sticky_bits` | skip | every hit is in the daily user's home: the rootless Podman volume of my kind lab (node `kind-control-plane`). Inside, files belong to subordinate uids / gids (no passwd entry) and keep the container's own modes (world-writable dirs of the node image). The home is 0700: no other user reaches them. The scanner walks `/var/home` fully. Gone with the lab: `kind delete cluster` | unselect |
 
 ## Mullvad VPN (replaced Proton VPN 2026-10-26, docs/mullvad.md)
 - mullvad-daemon runs as root (owns its nftables table, routes, DNS). Package unit,

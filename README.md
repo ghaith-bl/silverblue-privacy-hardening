@@ -42,7 +42,9 @@ Since that scan (2026-11-21): the audit rules are written in the text the scanne
 (the same rules; 12 of the 16 pass that way, `privileged_commands` depends on what the
 scanner counts, 3 stay broader on purpose), and the copies written only for the scanner
 are gone (one place per setting): those fails are false positives in
-[docs/deviations.md](docs/deviations.md). New numbers with the next scan.
+[docs/deviations.md](docs/deviations.md). New numbers with the next scan, plain and with
+[compliance/tailoring.xml](compliance/tailoring.xml) (the deviations unselected or set to my
+values, each with its row; how to scan: [compliance/README.md](compliance/README.md)).
 
 Reports stay on the host, never in git (`.gitignore`: `scap-*`).
 
@@ -221,6 +223,8 @@ else. Root stays locked.
 
 - `tools/admin-run.sh` - review, then run, a script from the daily user (as the admin)
 - `tools/check-accounts.sh <admin> <daily>` - read-only PASS / FAIL check of the account split
+- `tools/check-tailoring.py [<data stream>]` - `compliance/tailoring.xml` against the installed
+  scap-security-guide (after an update, before a scan)
 - `tools/check-private-info.sh` - private data check of the tree / history before a push
 - `tools/kargs-bench.sh before|after` - same numbers before and after a kernel arg trial
 - `tools/lint.sh [<sectop repo>]` - the CI's lint checks before a push (ASCII, bash -n,

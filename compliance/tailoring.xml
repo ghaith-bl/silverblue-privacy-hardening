@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Tailoring of scap-security-guide 0.1.82, profile cis_workstation_l2 (Fedora).
+     Every entry has a row in docs/deviations.md (reason; review date at its top),
+     checked by tests/test_tailoring.py. How to scan with it: compliance/README.md -->
+<xccdf-1.2:Tailoring xmlns:xccdf-1.2="http://checklists.nist.gov/xccdf/1.2" id="xccdf_local_tailoring_silverblue-privacy-hardening">
+  <xccdf-1.2:benchmark href="ssg-fedora-ds.xml"/>
+  <xccdf-1.2:version time="2026-11-22T00:00:00">1</xccdf-1.2:version>
+  <xccdf-1.2:Profile id="xccdf_org.ssgproject.content_profile_cis_workstation_l2_tailored" extends="xccdf_org.ssgproject.content_profile_cis_workstation_l2">
+    <xccdf-1.2:title override="true">CIS Fedora L2 Workstation (DRAFT), tailored: deviations of silverblue-privacy-hardening</xccdf-1.2:title>
+    <!-- Would break this machine -->
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_kernel_module_overlayfs_disabled" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_xwayland_disabled" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_ip_forward" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_forwarding" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_default_forwarding" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_package_dnsmasq_removed" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_package_httpd_removed" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_package_rsync_removed" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_kernel_module_usb-storage_disabled" selected="false"/>
+    <xccdf-1.2:set-value idref="xccdf_org.ssgproject.content_value_sysctl_net_ipv4_conf_all_rp_filter_value">2</xccdf-1.2:set-value>
+    <xccdf-1.2:set-value idref="xccdf_org.ssgproject.content_value_sysctl_net_ipv4_conf_default_rp_filter_value">2</xccdf-1.2:set-value>
+    <!-- Not useful on a personal device -->
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_accounts_tmout" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_banner_etc_issue_cis" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_banner_etc_issue_net_cis" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_dconf_gnome_banner_enabled" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_dconf_gnome_login_banner_text" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sshd_enable_warning_banner_net" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sshd_limit_user_access" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_package_systemd-journal-remote_installed" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_accounts_passwords_pam_faillock_even_deny_root_or_root_unlock_time" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_ensure_root_password_configured" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_service_bluetooth_disabled" selected="false"/>
+    <!-- Two accounts -->
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_account_disable_post_pw_expiration" selected="false"/>
+    <!-- Passwords: CIS on purpose -->
+    <xccdf-1.2:set-value idref="xccdf_org.ssgproject.content_value_var_password_pam_minlen">15</xccdf-1.2:set-value>
+    <!-- Changed on purpose -->
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sysctl_kernel_yama_ptrace_scope" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_chmod" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_chown" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_fchmod" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_fchmodat" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_fchmodat2" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_fchown" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_fchownat" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_fremovexattr" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_fsetxattr" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_lchown" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_lremovexattr" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_lsetxattr" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_removexattr" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_dac_modification_setxattr" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_file_deletion_events_rename" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_file_deletion_events_renameat" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_file_deletion_events_renameat2" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_file_deletion_events_unlink" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_file_deletion_events_unlinkat" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_unsuccessful_file_modification_creat" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_unsuccessful_file_modification_ftruncate" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_unsuccessful_file_modification_open" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_unsuccessful_file_modification_openat" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_unsuccessful_file_modification_truncate" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_time_clock_settime" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_accounts_password_pam_modules_in_authselect_profile" selected="false"/>
+    <xccdf-1.2:set-value idref="xccdf_org.ssgproject.content_value_sysctl_kernel_kptr_restrict_value">2</xccdf-1.2:set-value>
+    <xccdf-1.2:set-value idref="xccdf_org.ssgproject.content_value_var_auditd_disk_full_action">suspend</xccdf-1.2:set-value>
+    <xccdf-1.2:set-value idref="xccdf_org.ssgproject.content_value_var_auditd_admin_space_left_action">suspend</xccdf-1.2:set-value>
+    <xccdf-1.2:set-value idref="xccdf_org.ssgproject.content_value_var_auditd_space_left_action">syslog</xccdf-1.2:set-value>
+    <xccdf-1.2:set-value idref="xccdf_org.ssgproject.content_value_var_auditd_disk_error_action">syslog</xccdf-1.2:set-value>
+    <xccdf-1.2:set-value idref="xccdf_org.ssgproject.content_value_var_auditd_max_log_file_action">rotate</xccdf-1.2:set-value>
+    <xccdf-1.2:set-value idref="xccdf_org.ssgproject.content_value_var_auditd_max_log_file">32</xccdf-1.2:set-value>
+    <xccdf-1.2:set-value idref="xccdf_org.ssgproject.content_value_var_sshd_set_keepalive">3</xccdf-1.2:set-value>
+    <!-- Scanner false positives on Silverblue -->
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_audit_argument" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_grub2_audit_backlog_limit_argument" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_kernel_module_loading_create" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_kernel_module_loading_query" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_ensure_fedora_gpgkey_installed" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_package_cron_installed" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sysctl_fs_suid_dumpable" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_file_groupownership_sshd_private_key" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_sshd_disable_gssapi_auth" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_accounts_password_pam_unix_authtok" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_networkconfig_modification_sethostname" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_networkconfig_modification_setdomainname" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_audit_rules_networkconfig_modification_etc_networkmanager_system_connections" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_journald_disable_forward_to_syslog" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_dconf_gnome_disable_user_list" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_dconf_db_up_to_date" selected="false"/>
+    <!-- Rootless container storage -->
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_no_files_or_dirs_unowned_by_user" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_no_files_or_dirs_ungroupowned" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_file_permissions_unauthorized_world_writable" selected="false"/>
+    <xccdf-1.2:select idref="xccdf_org.ssgproject.content_rule_dir_perms_world_writable_sticky_bits" selected="false"/>
+  </xccdf-1.2:Profile>
+</xccdf-1.2:Tailoring>

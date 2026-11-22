@@ -71,6 +71,8 @@ Tests run after hardening + reboot. All passed.
 |-------|---------|----------|
 | second run changes nothing | the same sections again (`sudo ADMIN_USER=<admin> DAILY_USER=<daily> ./harden-workstation.sh <sections>`) | `no change` per section, summary `Backups: none`, no new folder in `/var/backups/hardening/` |
 | a failed command is reported | (sandbox / VM) a section with a missing tool, e.g. no `ip` for `browsevm` | `STOP: section browsevm, sec_browsevm line N, exit 127: have=$(ip ...)`, summary: stopped section, `not run:` list |
+| tailoring matches the deviations | `python3 -I -B -m unittest discover -s tests -p test_tailoring.py` (CI runs all tests) | `OK`: every entry of `compliance/tailoring.xml` has a row in `docs/deviations.md`, every row matches the file |
+| tailored scan | `compliance/README.md` (plain and tailored, as root) | tailored: only backlog rules fail (listed in `compliance/scan-summary.md`); a new fail = a change or a scanner update to look at |
 | audit rules loaded | `sudo auditctl -l \| wc -l` | 53 + two per setuid program (since 2026-11-21: path rules once per arch; this host: 105 with 26 programs; changes with the setuid list) |
 | setuid / setgid audited | `sudo auditctl -l \| grep -c 'key=privileged'` | twice `find /usr -xdev -type f \( -perm -4000 -o -perm -2000 \) \| wc -l` (one rule per arch each) |
 | path rules per arch | `sudo auditctl -l \| grep -- '-F path=' \| grep -vc 'arch=b'` | `0` |
