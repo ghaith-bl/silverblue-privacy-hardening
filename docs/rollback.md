@@ -14,6 +14,7 @@ sudo rpm-ostree override reset open-vm-tools-desktop open-vm-tools spice-vdagent
 sudo systemctl disable --now aidecheck.timer     # integrity: no daily check (database stays;
                                                  # rpm-ostree uninstall aide + reboot: package gone)
 sudo cp /var/lib/aide/aide.db.gz.prev /var/lib/aide/aide.db.gz   # integrity: the baseline before the last accept
+sudo semodule -r harden_aide_efi                 # integrity: aide's fstatfs on /boot/efi denied again
 sudo rm /etc/wireplumber/wireplumber.conf.d/90-disable-mic.conf
 systemctl --user restart wireplumber
 sudo rm /etc/NetworkManager/conf.d/90-privacy.conf /etc/systemd/resolved.conf.d/90-privacy.conf

@@ -1,0 +1,6 @@
+; harden_aide_efi - local SELinux module of silverblue-privacy-hardening (integrity
+; section, 2026-11-22). aide (aide_t) reads the file system type of every entry it checks
+; (fstatfs); Fedora's policy refuses it on the EFI partition (vfat, dosfs_t): ~19 denials
+; and "fstatfs() failed" warnings per run (host 2026-11-22). Only that: getattr on the
+; file system, no read or write of any file.
+(allow aide_t dosfs_t (filesystem (getattr)))

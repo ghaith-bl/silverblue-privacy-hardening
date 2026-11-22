@@ -253,9 +253,15 @@
   them from there).
 - scap-security-guide's periodic-check rule reads cron files only; the CIS benchmarks also
   give `aidecheck.service` + `aidecheck.timer`: same names, scanner false positive row.
-- aide may run in its own SELinux domain when systemd starts it: no `NoNewPrivileges`
-  (and nothing that implies it) in the unit; `--init` / `--accept` run aide through
-  `systemd-run` with the unit's properties, so both read the same files.
+- aide runs in its own SELinux domain (`aide_t`) when systemd starts it: no
+  `NoNewPrivileges` (and nothing that implies it) in the unit; `--init` / `--accept` run
+  aide through `systemd-run` with the unit's properties, so both read the same files.
+- aide 0.19 calls fstatfs on every entry (file system type): Fedora's policy refuses
+  `aide_t` getattr on `dosfs_t` (the EFI partition), ~19 AVCs + warnings per run, files
+  still hashed (host 2026-11-22). Local module `harden_aide_efi`: that one permission.
+- `PrivateNetwork=yes` = a new network namespace: `net.core.bpf_jit_harden` (and the
+  other `net.core.bpf_*` sysctls) exist only in the first namespace, the root check read
+  "No such file". `IPAddressDeny=any` blocks IP without a namespace.
 
 ## Audio
 

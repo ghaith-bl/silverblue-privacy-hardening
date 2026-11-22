@@ -2130,7 +2130,8 @@ sec_kargs() {
 ## regularly checked"; scap-security-guide aide_*) + the root drift check (review
 ## 2026-11-17, D-U1; scope 2026-11-22). Package layered by hand first (rpm-ostree install
 ## aide, reboot). /etc/aide.conf from integrity/aide.conf (scope + why: in that file),
-## /usr/local/sbin/harden-check, aidecheck.service + .timer (5 min after boot, daily). The
+## /usr/local/sbin/harden-check, aidecheck.service + .timer (5 min after boot, daily),
+## SELinux module harden_aide_efi (aide may stat the EFI partition's file system). The
 ## first run builds the database = the baseline. Every later change of a watched file,
 ## also one by this script, stays yellow in sectop until the admin accepts it:
 ## sudo harden-check --accept (shows every change, y = new baseline). Never accepts by
@@ -2139,14 +2140,27 @@ sec_integrity() {
   local src conf=/etc/aide.conf tool=/usr/local/sbin/harden-check state=/var/lib/harden-check
   local unit=/etc/systemd/system/aidecheck.service timer=/etc/systemd/system/aidecheck.timer
   local c0 f grp=root tmp db=/var/lib/aide/aide.db.gz conf_changed=0
+  local polcopy=/etc/harden-workstation/harden_aide_efi.cil
   src="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/integrity"
   if ! rpm -q aide >/dev/null 2>&1; then
     warn "aide not installed: rpm-ostree install aide, reboot, run again"
     return 0
   fi
-  for f in aide.conf harden-check aidecheck.service aidecheck.timer; do
+  for f in aide.conf harden-check aidecheck.service aidecheck.timer harden_aide_efi.cil; do
     [[ -f $src/$f ]] || die "$src/$f missing (run from the repo)"
   done
+  # local SELinux module: aide may stat the EFI partition's file system, nothing more
+  # (integrity/harden_aide_efi.cil). Its copy in /etc/harden-workstation says what is in
+  # the store: same copy + module listed = no change
+  if ! semodule -l | grep -x harden_aide_efi >/dev/null || ! cmp -s "$src/harden_aide_efi.cil" "$polcopy"; then
+    log "SELinux module harden_aide_efi (policy rebuild, about half a minute) ..."
+    if semodule -i "$src/harden_aide_efi.cil"; then
+      changed "SELinux module harden_aide_efi"
+      write_file "$polcopy" 0644 < "$src/harden_aide_efi.cil"
+    else
+      warn "semodule -i harden_aide_efi.cil failed: aide's fstatfs on /boot/efi stays denied (warnings, AVCs)"
+    fi
+  fi
   # a config aide refuses never replaces the one in place (temp copy in /etc: a label
   # aide's SELinux domain may read)
   tmp=$(mktemp /etc/.aide.conf.XXXXXX)

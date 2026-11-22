@@ -145,9 +145,19 @@ class Units(unittest.TestCase):
         for p in hc.UNIT_PROPS:
             self.assertIn(p + '\n', text)
         # bind mounts by PID 1 (SELinux mounton) and no_new_privs (domain change): never
+        # own network namespace: no net.core.bpf_* sysctls there (host 2026-11-22)
+        self.assertIn('IPAddressDeny=any\n', text)
         for bad in ('ProtectSystem', 'ReadWritePaths', 'ReadOnlyPaths', 'ProtectHome',
-                    'NoNewPrivileges', 'SystemCallFilter', 'RestrictAddressFamilies'):
+                    'NoNewPrivileges', 'SystemCallFilter', 'RestrictAddressFamilies',
+                    'PrivateNetwork'):
             self.assertNotRegex(text, rf'(?m)^{bad}=', bad)
+
+    def test_selinux_module_one_narrow_rule(self):
+        text = read(os.path.join(HERE, 'integrity', 'harden_aide_efi.cil'))
+        self.assertTrue(text.isascii())
+        rules = [ln for ln in text.splitlines() if ln.strip() and not ln.startswith(';')]
+        # aide may stat the EFI partition's file system: nothing else
+        self.assertEqual(rules, ['(allow aide_t dosfs_t (filesystem (getattr)))'])
 
     def test_timer(self):
         text = read(TIMER)

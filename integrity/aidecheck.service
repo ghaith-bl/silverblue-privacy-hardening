@@ -19,9 +19,12 @@ IOSchedulingClass=idle
 UMask=0077
 TimeoutStartSec=15min
 # No ProtectSystem / ReadWritePaths / ProtectHome (bind mounts by PID 1: SELinux mounton,
-# host 2026-11-22, audit-privileged-sync), no NoNewPrivileges (aide may run in its own
-# SELinux domain: no domain change under no_new_privs). Root-owned programs, no input
-# from a home; reads everything in the scope, writes /var/lib/aide, /var/log/aide and
+# host 2026-11-22, audit-privileged-sync), no NoNewPrivileges (aide runs in its own
+# SELinux domain aide_t: no domain change under no_new_privs). No PrivateNetwork: its own
+# network namespace has no net.core.bpf_* sysctls (only the first namespace has them,
+# host 2026-11-22: bpf-jit "No such file"); IPAddressDeny=any blocks every IP packet of
+# the unit instead (cgroup filter, no namespace). Root-owned programs, no input from a
+# home; reads everything in the scope, writes /var/lib/aide, /var/log/aide and
 # /var/lib/harden-check only.
-PrivateNetwork=yes
+IPAddressDeny=any
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_AUDIT_CONTROL
