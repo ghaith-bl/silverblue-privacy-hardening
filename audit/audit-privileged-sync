@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+#
+# audit-privileged-sync - audit rules for the setuid / setgid programs of the booted image
+# (audit-rules section of harden-workstation.sh; review 2026-11-17, L-1).
+#
+#   audit-privileged-sync                  write /etc/audit/rules.d/55-privileged.rules
+#   audit-privileged-sync --print [dir]    the rules on stdout (dir: default /usr; tests)
+#
+# One rule per arch (b32 + b64) for every regular file with the setuid or setgid bit
+# under /usr, one file system (scap-security-guide audit_rules_privileged_commands). On
+# Silverblue /usr changes only with a new deployment, i.e. at a reboot:
+# audit-privileged-sync.service runs this at boot, before audit-rules.service loads
+# rules.d, so the loaded rules follow the programs of the booted image (an update that
+# adds or drops a setuid program needs no new run of the section).
+# Installed root-owned (/usr/local/sbin). Input: /usr only (no home, no environment, no
+# argument from the unit). A failed or empty scan keeps the old file (never an empty
+# list): exit 1, the unit fails (sectop: failed units), audit-rules.service still loads
+# the old file. A path with characters an audit rule line cannot carry is skipped and
+# named (sectop's audit-rules check then counts one program without rules).
+#
+set -euo pipefail
+export LC_ALL=C PATH=/usr/bin:/usr/sbin
+
+OUT=/etc/audit/rules.d/55-privileged.rules
+SCAN=/usr
+SAFE='^/[A-Za-z0-9._+@/-]+$'
+
+# rules <dir>: the file content on stdout; skipped paths on stderr
+rules() {
+  local f a
+  echo "## setuid / setgid programs under /usr, one rule per arch. Written at boot by"
+  echo "## audit-privileged-sync.service (harden-workstation.sh audit-rules)"
+  find "$1" -xdev -type f \( -perm -4000 -o -perm -2000 \) -print0 | sort -z |
+    while IFS= read -r -d '' f; do
+      if [[ ! $f =~ $SAFE ]]; then
+        printf 'skipped (name not usable in a rule): %q\n' "$f" >&2
+        continue
+      fi
+      for a in b32 b64; do
+        printf -- '-a always,exit -F arch=%s -F path=%s -F perm=x -F auid>=1000 -F auid!=unset -k privileged\n' "$a" "$f"
+      done
+    done
+}
+
+# programs <file>: the paths of its rules, one per program
+programs() { awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^path=/) print substr($i, 6) }' "$1" | sort -u; }
+
+if [[ ${1:-} == --print ]]; then
+  rules "${2:-$SCAN}"
+  exit 0
+fi
+[[ $# -eq 0 ]] || { echo "usage: audit-privileged-sync [--print [dir]]" >&2; exit 2; }
+[[ $EUID -eq 0 ]] || { echo "run as root (audit-privileged-sync.service)" >&2; exit 2; }
+
+# same folder: the rename is atomic; the name does not end in .rules (augenrules skips it)
+tmp=$(mktemp "${OUT%/*}/.55-privileged.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+if ! rules "$SCAN" > "$tmp"; then
+  echo "scan of $SCAN failed: $OUT kept" >&2
+  exit 1
+fi
+n=$(programs "$tmp" | wc -l)
+if (( n == 0 )); then
+  echo "no setuid / setgid program found under $SCAN: $OUT kept" >&2
+  exit 1
+fi
+if [[ -f $OUT ]] && cmp -s "$tmp" "$OUT"; then
+  echo "$OUT: no change ($n programs)"
+  exit 0
+fi
+if [[ -f $OUT ]]; then
+  # what changed with this image: a new setuid program is worth a look
+  comm -13 <(programs "$OUT") <(programs "$tmp") | sed 's/^/new: /'
+  comm -23 <(programs "$OUT") <(programs "$tmp") | sed 's/^/gone: /'
+fi
+chmod 0640 "$tmp"
+mv -f "$tmp" "$OUT"
+echo "$OUT: written ($n programs)"

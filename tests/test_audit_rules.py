@@ -158,5 +158,110 @@ class AuditRules(unittest.TestCase):
             self.assertTrue(os.stat(setuid[0]).st_mode & (stat.S_ISUID | stat.S_ISGID))
 
 
+
+SYNC = os.path.join(HERE, 'audit', 'audit-privileged-sync')
+
+
+class PrivilegedSync(unittest.TestCase):
+    """audit/audit-privileged-sync write mode (boot unit), on a copy with test paths:
+    rules file, scanned dir and the root check replaced (the real one takes no input)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        t = self.tmp.name
+        self.usr, self.out = os.path.join(t, 'usr'), os.path.join(t, 'rules.d', '55-privileged.rules')
+        os.makedirs(self.usr)
+        os.makedirs(os.path.dirname(self.out))
+        with open(SYNC) as f:
+            text = f.read()
+        for old, new in (('OUT=/etc/audit/rules.d/55-privileged.rules', f'OUT={self.out}'),
+                         ('SCAN=/usr', f'SCAN={self.usr}'),
+                         ('[[ $EUID -eq 0 ]] ||', '[[ -n x ]] ||')):
+            self.assertEqual(text.count(old), 1, old)
+            text = text.replace(old, new)
+        self.script = os.path.join(t, 'sync')
+        with open(self.script, 'w') as f:
+            f.write(text)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def prog(self, name, mode=0o4755):
+        p = os.path.join(self.usr, name)
+        with open(p, 'w') as f:
+            f.write('#!/bin/sh\n')
+        os.chmod(p, mode)
+        return p
+
+    def run_sync(self, *args):
+        return subprocess.run(['bash', self.script, *args], capture_output=True, text=True,
+                              timeout=60, env={'PATH': '/usr/bin:/bin'})
+
+    def read(self):
+        with open(self.out) as f:
+            return f.read()
+
+    def test_write_then_no_change(self):
+        su, wr = self.prog('su'), self.prog('write', 0o2755)
+        self.prog('ls', 0o755)
+        r = self.run_sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('written (2 programs)', r.stdout)
+        text = self.read()
+        self.assertEqual(stat.S_IMODE(os.stat(self.out).st_mode), 0o640)
+        for a in ('b32', 'b64'):
+            found = sorted(m.group(1) for m in re.finditer(privileged(a), text, re.M))
+            self.assertEqual(found, sorted([su, wr]))
+        self.assertEqual(text, subprocess.run(['bash', self.script, '--print'], capture_output=True,
+                                              text=True, env={'PATH': '/usr/bin:/bin'}).stdout)
+        r = self.run_sync()
+        self.assertIn('no change (2 programs)', r.stdout)
+        self.assertEqual(os.listdir(os.path.dirname(self.out)), ['55-privileged.rules'])
+
+    def test_new_and_gone_named(self):
+        su = self.prog('su')
+        self.run_sync()
+        os.unlink(su)
+        new = self.prog('newuid')
+        r = self.run_sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f'new: {new}', r.stdout)
+        self.assertIn(f'gone: {su}', r.stdout)
+        self.assertNotIn(su, self.read())
+
+    def test_failed_scan_keeps_old_file(self):
+        self.prog('su')
+        self.run_sync()
+        before = self.read()
+        for p in os.listdir(self.usr):
+            os.unlink(os.path.join(self.usr, p))
+        r = self.run_sync()                       # empty: never an empty list
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('kept', r.stderr)
+        self.assertEqual(self.read(), before)
+        os.rmdir(self.usr)
+        r = self.run_sync()                       # find fails
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('kept', r.stderr)
+        self.assertEqual(self.read(), before)
+        self.assertEqual(os.listdir(os.path.dirname(self.out)), ['55-privileged.rules'])
+
+    def test_unusable_name_skipped(self):
+        self.prog('su')
+        self.prog('bad name')
+        self.prog('x\n-D')
+        r = self.run_sync()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('written (1 programs)', r.stdout)
+        self.assertEqual(r.stderr.count('skipped'), 2)
+        self.assertNotIn('bad', self.read())
+        self.assertNotIn('-D', self.read().replace('-D ', ''))
+        rules = [ln for ln in self.read().splitlines() if ln and not ln.startswith('##')]
+        self.assertEqual(len(rules), 2)
+
+    def test_arguments(self):
+        self.assertEqual(self.run_sync('--bogus').returncode, 2)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -65,7 +65,7 @@ private() {
 hardening() {
   local f rc=0
   local -a sh=(harden-workstation.sh tools/*.sh usbguard/*.sh appunit/*.sh firewall/*.sh browsers/*.sh
-               browsers/brave/*.sh browsers/firefox/*.sh browsevm/*.sh)
+               browsers/brave/*.sh browsers/firefox/*.sh browsevm/*.sh audit/audit-privileged-sync)
   ascii .
   for f in "${sh[@]}"; do bash -n "$f" || rc=1; done
   for f in firewall/nm-dispatcher/90-hostfw-sync netprivacy/nm-dispatcher/50-netprivacy; do sh -n "$f" || rc=1; done

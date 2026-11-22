@@ -1,0 +1,29 @@
+# audit rules for the setuid / setgid programs of the booted image, before
+# audit-rules.service builds audit.rules from rules.d and loads it (audit 4: the rules
+# load there, not in auditd.service). Installed by harden-workstation.sh audit-rules.
+# Fails: the old 55-privileged.rules stays and still loads (Wants, not Requires).
+[Unit]
+Description=Audit rules for the setuid / setgid programs of this image
+Documentation=file:///usr/local/sbin/audit-privileged-sync
+DefaultDependencies=no
+After=local-fs.target
+Before=audit-rules.service
+RequiresMountsFor=/var/usrlocal/sbin /etc/audit/rules.d
+ConditionKernelCommandLine=!audit=0
+ConditionKernelCommandLine=!audit=off
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/audit-privileged-sync
+TimeoutStartSec=90
+# reads /usr, writes rules.d only
+ProtectSystem=strict
+ReadWritePaths=/etc/audit/rules.d
+ProtectHome=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+UMask=0077
+
+[Install]
+WantedBy=audit-rules.service

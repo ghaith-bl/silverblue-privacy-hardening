@@ -1098,17 +1098,16 @@ EOF
 }
 
 # rules_privileged [dir]: content of 55-privileged.rules, one rule per arch for every
-# setuid / setgid file under <dir> (default /usr, one file system; tests pass a temp dir)
+# setuid / setgid file under <dir> (default /usr, one file system; tests pass a temp dir).
+# The same code as at boot (audit/audit-privileged-sync, review 2026-11-17 L-1).
 # shellcheck disable=SC2120
 rules_privileged() {
-  local f
-  echo "## setuid/setgid programs under /usr - regenerate after major upgrades"
-  find "${1:-/usr}" -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | sort |
-    while IFS= read -r f; do path_rule "$f" privileged; done
+  "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/audit/audit-privileged-sync" --print "${1:-/usr}"
 }
 
 sec_audit_rules() {
-  local d=/etc/audit/rules.d
+  local d=/etc/audit/rules.d c0 src priv sync=/usr/local/sbin/audit-privileged-sync
+  local unit=/etc/systemd/system/audit-privileged-sync.service
   # The earlier 50-watch.rules used b64-only rules, which miss 32-bit programs (Steam).
   if [[ -e $d/50-watch.rules ]]; then
     backup "$d/50-watch.rules"; rm -f "$d/50-watch.rules"; log "removed old 50-watch.rules (backed up)"
@@ -1124,7 +1123,22 @@ EOF
     warn "no /usr/sbin/usermod: the usermod rule watches nothing here (/usr/sbin not a link to bin?)"
   fi
   rules_cis | write_file "$d/50-cis-workstation.rules" 0640
-  rules_privileged | write_file "$d/55-privileged.rules" 0640
+  # setuid / setgid list: written now and again at every boot, before audit-rules.service
+  # (the list follows the booted image: updates add and drop programs). Root-owned copy
+  # of the generator, no input from a home; a failed scan keeps the old file.
+  src="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/audit"
+  [[ -f $src/audit-privileged-sync && -f $src/audit-privileged-sync.service ]] ||
+    die "$src/audit-privileged-sync(.service) missing (run from the repo)"
+  c0=$(section_changes)
+  write_file "$sync" 0755 < "$src/audit-privileged-sync"
+  write_file "$unit" 0644 < "$src/audit-privileged-sync.service"
+  (( $(section_changes) == c0 )) || systemctl daemon-reload
+  enable_unit audit-privileged-sync.service ||
+    warn "enable audit-privileged-sync.service failed: the list is written now, not at boot"
+  # into a variable first: a failed scan stops the run before the file is touched
+  priv=$(rules_privileged)
+  [[ $priv == *"-k privileged"* ]] || die "no setuid / setgid program found under /usr: 55-privileged.rules kept"
+  printf '%s\n' "$priv" | write_file "$d/55-privileged.rules" 0640
 
   if [[ $ENABLE_NOISY_AUDIT == yes ]]; then
     write_file "$d/60-cis-noisy.rules" 0640 <<'EOF'

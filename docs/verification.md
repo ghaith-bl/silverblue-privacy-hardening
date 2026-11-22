@@ -75,6 +75,8 @@ Tests run after hardening + reboot. All passed.
 | tailored scan | `compliance/README.md` (plain and tailored, as root) | tailored: only backlog rules fail (listed in `compliance/scan-summary.md`); a new fail = a change or a scanner update to look at |
 | audit rules loaded | `sudo auditctl -l \| wc -l` | 53 + two per setuid program (since 2026-11-21: path rules once per arch; this host: 105 with 26 programs; changes with the setuid list) |
 | setuid / setgid audited | `sudo auditctl -l \| grep -c 'key=privileged'` | twice `find /usr -xdev -type f \( -perm -4000 -o -perm -2000 \) \| wc -l` (one rule per arch each) |
+| setuid list at boot | `systemctl show -p After audit-rules.service \| grep -o audit-privileged-sync`; `journalctl -b -u audit-privileged-sync.service -o cat` | `audit-privileged-sync`; `... no change (N programs)` or `written (N programs)` with `new:` / `gone:` lines after an update |
+| setuid list kept on a failed scan | (sandbox) `python3 -I -B -m unittest discover -s tests -p test_audit_rules.py` | `OK`: empty or failed scan exits 1, old file kept; a path an audit rule cannot carry is skipped and named |
 | path rules per arch | `sudo auditctl -l \| grep -- '-F path=' \| grep -vc 'arch=b'` | `0` |
 | usermod rule | `readlink -f /usr/sbin/usermod` | `/usr/bin/usermod` (the rule's path `/usr/sbin/usermod` reaches the program) |
 | guesttools | `rpm-ostree status --booted --json \| grep -A5 requested-base-removals`; `rpm -q open-vm-tools open-vm-tools-desktop spice-vdagent`; `ls /etc/xdg/autostart \| grep -iE 'vmware\|vbox\|spice'` | the three names listed; `not installed` each; no autostart file |

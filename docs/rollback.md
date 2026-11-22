@@ -10,7 +10,7 @@ faillock --user "$USER" --reset                  # from a root shell, if locked
 sudo sed -i 's/^minlen = .*/minlen = 14/' /etc/security/pwquality.conf   # pam: CIS length (new passwords)
 sudo systemctl unmask <unit>                     # bring a service back
 sudo rpm-ostree override reset open-vm-tools-desktop open-vm-tools spice-vdagent   # guesttools: back at the
-                                                 # next boot; then audit-rules, reboot (setuid rule back)
+                                                 # next boot, its setuid rule too (audit-privileged-sync)
 sudo rm /etc/wireplumber/wireplumber.conf.d/90-disable-mic.conf
 systemctl --user restart wireplumber
 sudo rm /etc/NetworkManager/conf.d/90-privacy.conf /etc/systemd/resolved.conf.d/90-privacy.conf
@@ -84,6 +84,8 @@ sudo rm /etc/audit/rules.d/70-io-uring.rules     # loads at the next boot (rules
 sudo cp /var/backups/hardening/<time>/etc/audit/rules.d/5*.rules /etc/audit/rules.d/
                                                  # audit rule text before the scanner's form (2026-11-21):
                                                  # the same rules, path rules without arch; next boot
+sudo systemctl disable audit-privileged-sync.service   # setuid list no longer at boot: only when
+                                                 # audit-rules runs (as before 2026-11-22)
 sudo rm /boot/grub2/user.cfg                     # GRUB password off
 sudo rm /etc/audit/rules.d/99-finalize.rules     # audit lock off, then reboot
 sudo rpm-ostree rollback                         # after booting the previous GRUB entry

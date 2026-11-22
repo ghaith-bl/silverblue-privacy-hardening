@@ -227,8 +227,10 @@
 - The setuid / setgid list under `/usr` changes with image updates: 28 programs on
   2026-11-03 (`mullvad-exclude` added), 27 on 2026-11-16 (`/usr/bin/userhelper` no longer
   in the image). `audit-rules` writes one `privileged` rule per program and arch (two
-  since 2026-11-21), so a fixed rule count in a checker breaks; run the section again
-  after updates. sectop compares the `privileged` rules with the programs it finds
+  since 2026-11-21), so a fixed rule count in a checker breaks. Since 2026-11-22
+  `audit-privileged-sync.service` writes the list at every boot, before
+  `audit-rules.service` loads rules.d (audit 4: rules load there, not in auditd.service):
+  /usr only changes with a new deployment, so boot is the moment. sectop compares the `privileged` rules with the programs it finds
   (posture `audit-rules`, `setuid_rules = 2`).
 
 ## Audio
