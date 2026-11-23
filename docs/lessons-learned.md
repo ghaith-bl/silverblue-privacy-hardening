@@ -271,3 +271,7 @@
 - Laptop mic and speakers share one HDA codec (ALC285) -> blacklisting the driver kills all sound.
 - Disable capture in WirePlumber (`node.disabled = true` on `alsa_input.pci-*`) -> speakers keep working.
 - This is a software block; a hardware/firmware block is stronger.
+- 2026-11-23: no seat ACL on the capture device (udev `TAG-="uaccess"` on `pcmC*D*c`) -> no
+  sound: WirePlumber's card profile opens capture with playback; only one output left, silent.
+  Back the same night after removing the rule + reboot. A udev tag removed in an event stays in
+  `TAGS` (sticky); `CURRENT_TAGS` is what the seat ACL uses.

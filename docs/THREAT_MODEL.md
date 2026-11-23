@@ -81,9 +81,9 @@ studying, testing and adding, and this page changes with it.
 - accounts: a daily user without sudo, an admin only on a text console (its shell files
   locked, nothing new can be put in its home), root locked; the login screen takes a
   password only
-- devices: USBGuard (only known USB devices), microphone off (WirePlumber + no ACL on the
-  capture devices), no camera, location service
-  off (host; into the script: planned)
+- devices: USBGuard (only known USB devices), microphone off (WirePlumber; a program in
+  my session can still open the capture device), no camera, location service off (host;
+  into the script: planned)
 - network privacy: random MAC per network, a generic hostname, no DHCP ids from the
   machine, DNS only through the tunnel, no LLMNR / mDNS
 - detection: auditd (53 rules + two per setuid program, locked until reboot), journald,
@@ -161,7 +161,8 @@ Tor, Qubes and Tails list the same kind of limits.
   on Wi-Fi / cable profiles, NTS time through the tunnel
 - browser: fingerprint resistance (Mullvad Browser, Tor Browser), separate profiles per
   identity, browsevm for unknown links
-- device: microphone off (WirePlumber + no ACL on the capture devices), no camera,
+- device: microphone off (WirePlumber; a session program can still open
+  the capture device), no camera,
   location service masked
 - account / behavior: an anonymous VPN account; logging in to an account links sessions
   whatever the network does (my practice, not something a config can enforce)

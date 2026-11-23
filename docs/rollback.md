@@ -24,8 +24,6 @@ setfacl -R -x u:sectop-home ~                    # homelock, as the daily user: 
                                                  # read access gone (sectop shows unreadable)
 sudo rm /etc/wireplumber/wireplumber.conf.d/90-disable-mic.conf
 systemctl --user restart wireplumber
-sudo rm /etc/udev/rules.d/71-no-capture.rules   # mic all: capture devices get the seat ACL again
-sudo udevadm control --reload                    # (after a reboot, or set MIC_DISABLE=no)
 sudo rm /etc/NetworkManager/conf.d/90-privacy.conf /etc/systemd/resolved.conf.d/90-privacy.conf
 sudo rm /etc/NetworkManager/dispatcher.d/50-netprivacy   # new networks keep what they get
 sudo systemctl reload NetworkManager systemd-resolved   # then reconnect

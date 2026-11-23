@@ -329,36 +329,40 @@ class MicJournald(unittest.TestCase):
         systemctl() { echo "systemctl $*" >> "$D/calls"; }
         getfacl()   { printf 'user::rw-\nuser:1000:rw-\ngroup::rw-\nmask::rw-\nother::---\n'; }
         setfacl()   { echo "setfacl $*" >> "$D/calls"; }
-        : > "$D/calls"; SND_DIR="$D/snd"
+        : > "$D/calls"; MIC_OLD_RULE="$D/71-no-capture.rules"
     '''
 
     setUp, tearDown, bash = Run.setUp, Run.tearDown, Run.bash
 
-    RULE = 'SUBSYSTEM=="sound", KERNEL=="pcmC[0-9]*D[0-9]*c", TAG-="uaccess"'
 
-    def test_mic_all_writes_rule_and_reloads_once(self):
+    def test_mic_all_wireplumber_only(self):
         rc, out = self.bash(f'''D="{self.d}"
             {self.FAKES}
             MIC_DISABLE=all TARGET_USER=""
             run_sections mic
             ''')
         self.assertEqual(rc, 0, out)
-        self.assertRegex(out, r'mic +2 change')
-        rule = read(os.path.join(self.d, 'etc/udev/rules.d/71-no-capture.rules'))
-        self.assertIn(self.RULE, rule.splitlines())
+        self.assertRegex(out, r'mic +1 change')
         wp = read(os.path.join(self.d, 'etc/wireplumber/wireplumber.conf.d/90-disable-mic.conf'))
         self.assertIn('~alsa_input.*', wp)
         self.assertIn('~bluez_input.*', wp)
-        calls = read(os.path.join(self.d, 'calls')).splitlines()
-        self.assertEqual(calls.count('udevadm control --reload'), 1, calls)
-        self.assertIn('udevadm trigger --subsystem-match=sound --action=change', calls)
-        rc, out = self.bash(f'''D="{self.d}"
-            {self.FAKES}
-            MIC_DISABLE=all TARGET_USER=""
-            run_sections mic
-            ''')
-        self.assertEqual(rc, 0, out)
-        self.assertRegex(out, r'mic +no change')
+        self.assertFalse(os.path.exists(os.path.join(self.d, 'etc/udev')))
+        self.assertEqual(read(os.path.join(self.d, 'calls')), '')
+
+    def test_mic_removes_old_udev_rule_once(self):
+        write(os.path.join(self.d, '71-no-capture.rules'), 'x\n')
+        for want in ('2 change', 'no change'):
+            rc, out = self.bash(f'''D="{self.d}"
+                {self.FAKES}
+                MIC_DISABLE=all TARGET_USER=""
+                run_sections mic
+                ''')
+            self.assertEqual(rc, 0, out)
+            self.assertRegex(out, r'mic +' + want)
+            if want == '2 change':
+                self.assertEqual(read(os.path.join(self.d, 'calls')).splitlines(),
+                                 ['udevadm control --reload'])
+        self.assertFalse(os.path.exists(os.path.join(self.d, '71-no-capture.rules')))
         self.assertEqual(read(os.path.join(self.d, 'calls')), '')
 
     def test_mic_no_writes_nothing(self):
