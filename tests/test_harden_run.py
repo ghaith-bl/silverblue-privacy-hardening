@@ -317,5 +317,71 @@ class HomeLock(Run):
         self.assertEqual(read(os.path.join(self.d, 'flags')), '')
 
 
+class MicJournald(unittest.TestCase):
+    """mic (MIC_DISABLE all / no) and journald: what they write; /etc paths redirected
+    into the temp dir, udevadm / getfacl / setfacl / systemctl faked (calls logged)."""
+
+    FAKES = r'''
+        write_file() { local p="$D$1" t; t=$(mktemp); cat > "$t"
+          if [[ -f $p ]] && cmp -s "$t" "$p"; then rm -f "$t"; return 0; fi
+          mkdir -p "$(dirname "$p")"; mv "$t" "$p"; changed "$1"; }
+        udevadm()   { echo "udevadm $*" >> "$D/calls"; }
+        systemctl() { echo "systemctl $*" >> "$D/calls"; }
+        getfacl()   { printf 'user::rw-\nuser:1000:rw-\ngroup::rw-\nmask::rw-\nother::---\n'; }
+        setfacl()   { echo "setfacl $*" >> "$D/calls"; }
+        : > "$D/calls"; SND_DIR="$D/snd"
+    '''
+
+    setUp, tearDown, bash = Run.setUp, Run.tearDown, Run.bash
+
+    RULE = 'SUBSYSTEM=="sound", KERNEL=="pcmC[0-9]*D[0-9]*c", TAG-="uaccess"'
+
+    def test_mic_all_writes_rule_and_reloads_once(self):
+        rc, out = self.bash(f'''D="{self.d}"
+            {self.FAKES}
+            MIC_DISABLE=all TARGET_USER=""
+            run_sections mic
+            ''')
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r'mic +2 change')
+        rule = read(os.path.join(self.d, 'etc/udev/rules.d/71-no-capture.rules'))
+        self.assertIn(self.RULE, rule.splitlines())
+        wp = read(os.path.join(self.d, 'etc/wireplumber/wireplumber.conf.d/90-disable-mic.conf'))
+        self.assertIn('~alsa_input.*', wp)
+        self.assertIn('~bluez_input.*', wp)
+        calls = read(os.path.join(self.d, 'calls')).splitlines()
+        self.assertEqual(calls.count('udevadm control --reload'), 1, calls)
+        self.assertIn('udevadm trigger --subsystem-match=sound --action=change', calls)
+        rc, out = self.bash(f'''D="{self.d}"
+            {self.FAKES}
+            MIC_DISABLE=all TARGET_USER=""
+            run_sections mic
+            ''')
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r'mic +no change')
+        self.assertEqual(read(os.path.join(self.d, 'calls')), '')
+
+    def test_mic_no_writes_nothing(self):
+        rc, out = self.bash(f'''D="{self.d}"
+            {self.FAKES}
+            MIC_DISABLE=no TARGET_USER=""
+            run_sections mic
+            ''')
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(os.path.join(self.d, 'etc')))
+        self.assertEqual(read(os.path.join(self.d, 'calls')), '')
+
+    def test_journald_one_month(self):
+        rc, out = self.bash(f'''D="{self.d}"
+            {self.FAKES}
+            run_sections journald
+            ''')
+        self.assertEqual(rc, 0, out)
+        conf = read(os.path.join(self.d, 'etc/systemd/journald.conf.d/90-cis.conf')).splitlines()
+        for line in ('[Journal]', 'Storage=persistent', 'ForwardToSyslog=no',
+                     'MaxRetentionSec=1month'):
+            self.assertIn(line, conf)
+
+
 if __name__ == '__main__':
     unittest.main()

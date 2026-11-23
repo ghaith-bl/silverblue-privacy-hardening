@@ -112,6 +112,8 @@ Tests run after hardening + reboot. All passed.
 | sudo works | `sudo -k && sudo true` | OK |
 | sudo log | `sudo tail -3 /var/log/sudo.log` | recent commands |
 | microphone off | `wpctl status` | `Sources:` empty |
+| mic: no capture ACL (`all`) | `getfacl -cn /dev/snd/pcmC*D*c`; `arecord -D hw:0,0 -d 1 /tmp/t.wav` (daily user) | no `user:<uid>` line; `Permission denied` |
+| journal one month | `systemd-analyze cat-config systemd/journald.conf \| grep MaxRetention`; `journalctl --list-boots \| head -2` | `MaxRetentionSec=1month`; first boot not older than about a month |
 | no exposed listeners | `sudo ss -tulpn` | only localhost / `virbr0` / WireGuard |
 | loopback (firewalld) | `sudo firewall-cmd --zone=trusted --list-all` | `interfaces: lo`, 2 rich rules (127.0.0.1, ::1) |
 | password age | `sudo chage -l <user>`; `grep -E '^PASS_(MAX\|MIN\|WARN)' /etc/login.defs` | `Minimum ... : 1`, `Maximum ... : 365`, `warning ... : 14` (both accounts); `365`, `1`, `14` |

@@ -74,6 +74,8 @@ compromise: change the password at once (`sudo passwd <user>` works the same day
 | Item | Setting | Reason / cost |
 |------|---------|---------------|
 | homelock | the daily user's unused start places made + immutable, the shell start files immutable as they are; ACL `u:sectop-home` (x on the way, r-x on the folders, nothing on files) | MITRE ATT&CK T1547.013 / T1543.002 / T1546.004: places a program in my session would use to run again. Cost: editing `.bashrc` / `.bash_profile` / `.bash_logout` needs the admin (`sudo chattr -i`, then the section again); no GNOME Shell extension, no user unit / timer, no autostart entry (a Flatpak's "run in background" request too), no user Flatpak install (`exports` locked), no Quadlet user unit. The home shows mode 710 (ACL mask: x for the watch only, group still nothing); `tools/check-accounts.sh` and the accounts section accept that ACL and nothing else |
+| mic `all` | WirePlumber: every capture node disabled (ALSA + Bluetooth); udev `71-no-capture.rules`: ALSA capture devices without the `uaccess` tag | WirePlumber alone only hides the nodes: any program in my session could open `/dev/snd/pcmC*D*c` itself (seat ACL). Cost: no microphone at all, USB / Bluetooth headsets included (no calls from this laptop); undo in rollback.md |
+| journal one month | `MaxRetentionSec=1month` | the journal is a record of my activity (threat model G1); a month covers detection and sectop. Cost: older entries deleted, no history further back |
 
 ## Scanner false positives on Silverblue (verified manually)
 

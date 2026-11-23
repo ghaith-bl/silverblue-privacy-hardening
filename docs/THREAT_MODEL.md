@@ -81,7 +81,8 @@ studying, testing and adding, and this page changes with it.
 - accounts: a daily user without sudo, an admin only on a text console (its shell files
   locked, nothing new can be put in its home), root locked; the login screen takes a
   password only
-- devices: USBGuard (only known USB devices), microphone off, no camera, location service
+- devices: USBGuard (only known USB devices), microphone off (WirePlumber + no ACL on the
+  capture devices), no camera, location service
   off (host; into the script: planned)
 - network privacy: random MAC per network, a generic hostname, no DHCP ids from the
   machine, DNS only through the tunnel, no LLMNR / mDNS
@@ -160,7 +161,8 @@ Tor, Qubes and Tails list the same kind of limits.
   on Wi-Fi / cable profiles, NTS time through the tunnel
 - browser: fingerprint resistance (Mullvad Browser, Tor Browser), separate profiles per
   identity, browsevm for unknown links
-- device: microphone off (WirePlumber), no camera, location service masked
+- device: microphone off (WirePlumber + no ACL on the capture devices), no camera,
+  location service masked
 - account / behavior: an anonymous VPN account; logging in to an account links sessions
   whatever the network does (my practice, not something a config can enforce)
 - limits: a VPN moves trust to the provider (pseudonymity, not anonymity); the strongest
@@ -203,9 +205,8 @@ Tor, Qubes and Tails list the same kind of limits.
   host's VPN exit. Tor Browser in browsevm: planned
 - Thunderbolt: security level `user`, DMA protection by the IOMMU on (measured
   `iommu_dma_protection` 1); a new device needs approval
-- journal: persistent; only journald's default size cap (10 % of the filesystem, at most
-  4 GiB): 2.9 GB, history since 2026-07 (measured 2026-11-18). Decided: one month,
-  applied in the journald step
+- journal: persistent, kept one month (`MaxRetentionSec=1month`, journald section,
+  2026-11-23); before: only journald's default size cap, 2.9 GB, history since 2026-07
 - admin account: scripts from my daily session run as the admin, after I read them in
   full (`tools/admin-run.sh`). If a bad one gets through, it cannot hide in the admin's
   shell (14 plant tries refused on the host, 2026-11-19): the shell files are locked, PATH has no folder from the home, and nothing new

@@ -86,7 +86,7 @@ sudo ./harden-workstation.sh all
 | `GUEST_TOOLS`          | `(open-vm-tools-desktop open-vm-tools virtualbox-guest-additions spice-vdagent)` | `guesttools`: VM guest agents removed from the image on real hardware; `()` = keep |
 | `SSH_SERVER`           | `off`      | `off` masks sshd (incoming only, outgoing `ssh` works) |
 | `FINGERPRINT`          | `disable`  | turn off `with-fingerprint` before enabling faillock; GDM fingerprint login off (locked) |
-| `MIC_DISABLE`          | `internal` | `internal` / `all` / `no`, via WirePlumber, speakers unaffected |
+| `MIC_DISABLE`          | `all`      | `all` (WirePlumber + no seat ACL on ALSA capture devices) / `internal` (laptop + jack mic, WirePlumber only) / `no`; speakers unaffected |
 | `ENABLE_NOISY_AUDIT`   | `no`       | DAC / delete / failed-open audit rules (very noisy with Steam / Brave) |
 | `MAKE_AUDIT_IMMUTABLE` | `yes`      | `-e 2`: audit rules locked until reboot |
 | `IDLE_LOCK_SECONDS`    | `900`      | GNOME idle lock |
@@ -167,7 +167,7 @@ sudo harden-check --accept            # after a change you made or an OS update:
 | `sysctl`      | kernel + network hardening (`/etc/sysctl.d/90-hardening.conf`); not CIS: KSPP attack surface (io_uring off, no tty ldisc autoload, FIFO / file protection 2, SysRq off, WARN / Oops limit 100, mmap bits max) | `dmesg`; gdb / strace do not work, not even with sudo; no io_uring |
 | `modules`     | blocks unused filesystems / protocols | no HFS / UDF mounts |
 | `coredump`    | no core dumps | crashes not saved |
-| `journald`    | persistent, compressed journal, no syslog forward (drop-in only) | none |
+| `journald`    | persistent, compressed journal, no syslog forward, kept one month (`MaxRetentionSec=1month`; drop-in only) | journal entries older than a month are deleted |
 | `gnome`       | no automount / autorun, 15 min idle lock, no login user list (dconf `gdm`, all locked); GDM: password login only (switchable authentication, passkey, web login, smartcard off and locked; fingerprint with `FINGERPRINT=disable`) | type the user name at login; no other login method offered |
 | `sudo`        | `use_pty`, `/var/log/sudo.log`, 5 min timeout | password asked again after 5 min |
 | `pam`         | faillock (5 tries -> 15 min), pwhistory (24), pwquality (15 chars, 4 classes, dictionary check), no empty passwords | lockout includes the lock screen |
@@ -182,7 +182,7 @@ sudo harden-check --accept            # after a change you made or an OS update:
 | `auditd`      | SYSLOG / SUSPEND instead of HALT, log ring 40 x 32 MiB | up to 1280 MiB in `/var/log/audit` |
 | `audit-rules` | CIS rules in the scanner's text (path rules once per arch), `-c`, setuid list of the booted image, written again at every boot (`audit-privileged-sync.service`, before `audit-rules.service`; a failed scan keeps the old list), `-e 2` lock; not CIS: `af-alg`, `io-uring` (2 rules each). 53 + two per setuid program (this host: 105 with 26) | more log volume; a rule change needs a reboot |
 | `perms`       | audit config 0640, `/boot/grub2` files 0600 (set again at boot by tmpfiles), dotfiles in the homes 0740 or stricter (daily user and admin) | none |
-| `mic`         | WirePlumber rule disables capture nodes | no microphone |
+| `mic`         | WirePlumber rule disables capture nodes; `MIC_DISABLE=all`: also `/etc/udev/rules.d/71-no-capture.rules` (ALSA capture devices lose the `uaccess` tag: no ACL for the logged-in user, a program in the session cannot open them directly), ACLs given before removed. Camera: none on this laptop (nothing to do); a new USB camera is blocked by `usbguard` | no microphone, USB / Bluetooth ones too; playback works |
 | `netprivacy`  | not CIS: random MAC, no hostname in DHCP, generic hostname (also a kernel arg), DHCP ids from that MAC, IPv6 temporary addresses, LLMNR + mDNS off, NetworkManager hands systemd-resolved no network's DNS (`dns=none`, `systemd-resolved=false`), no DNS servers and IPv6 off in Wi-Fi / cable profiles; a new network's profile gets the same on its first connect (NetworkManager dispatcher hook) | new device on the router each connect; prompt shows `localhost`; no DNS without the tunnel; no IPv6 on Wi-Fi / cable |
 | `mullvad`     | not CIS: Mullvad management socket only for group `mullvad`, the admin in it | `mullvad` CLI for the admin only |
 | `kvmlan`      | not CIS: table `inet kvmlan`, Mullvad's split tunneling marks on host <-> VM packets of `MULLVAD_VM_BRIDGES` only (no accept / drop) | VM lease + host <-> VM ssh with Allow LAN off; VM internet only via the tunnel |

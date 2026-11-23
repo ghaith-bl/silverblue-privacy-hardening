@@ -39,8 +39,9 @@ MAKE_AUDIT_IMMUTABLE="yes"   # "yes" = audit rules locked until reboot (-e 2): a
 SSH_SERVER="off"             # "on" = keep sshd usable (hardened) so other machines can SSH INTO this laptop.
                              # Outgoing ssh from this laptop to VMs / homelab works either way.
 FINGERPRINT="disable"        # "keep" if you use a fingerprint reader ("disable" avoids fast faillock lockouts)
-MIC_DISABLE="internal"       # "internal" = laptop mic + 3.5mm jack mic off (USB/Bluetooth mics still work)
-                             # "all" = every mic off | "no" = leave microphones alone
+MIC_DISABLE="all"            # "all" = every mic off: WirePlumber + no seat ACL on ALSA capture devices
+                             # "internal" = laptop mic + 3.5mm jack mic off in WirePlumber only
+                             # (USB / Bluetooth mics still work) | "no" = leave microphones alone
 IDLE_LOCK_SECONDS=900        # screen locks after 15 minutes idle
 PASS_MAX_DAYS=365            # pwage section: password max age (days) for new and existing accounts
 PASS_MIN_DAYS=1              # pwage section: min days between changes (pwhistory counts: no 24
@@ -104,6 +105,7 @@ CHANGE_LOG=""       # file: one line "<section> TAB <what>" per change (pipeline
 DONE_SECTIONS=()    # sections run to the end
 APPLIED_LIST="/etc/harden-workstation/applied"  # every section that ran to the end here once
                     # (name per line; harden-check reads it); tests point it elsewhere
+SND_DIR="/dev/snd"  # mic section: ALSA device nodes; tests point it elsewhere
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -388,6 +390,7 @@ sec_journald() {
 Storage=persistent
 Compress=yes
 ForwardToSyslog=no
+MaxRetentionSec=1month
 EOF
   # One place per setting (review 2026-11-17, C-4): the drop-in above. The copy of
   # ForwardToSyslog this script wrote into the main file for the scanner (it reads only
@@ -1270,7 +1273,8 @@ EOF
 }
 
 sec_mic() {
-  local conf=/etc/wireplumber/wireplumber.conf.d/90-disable-mic.conf alsa_match
+  local conf=/etc/wireplumber/wireplumber.conf.d/90-disable-mic.conf alsa_match c0 d acl
+  local rule=/etc/udev/rules.d/71-no-capture.rules
   case $MIC_DISABLE in
     internal) alsa_match='~alsa_input.pci-.*' ;;
     all)      alsa_match='~alsa_input.*' ;;
@@ -1298,8 +1302,51 @@ monitor.bluez.rules = [
 EOF
     fi
   } | write_file "$conf" 0644
+  c0=$(section_changes)
 
-  if (( $(section_changes) == 0 )); then
+  # WirePlumber only hides the nodes: a program in the session can still open an ALSA
+  # capture device itself (70-uaccess.rules tags every sound node, 73-seat-late.rules gives
+  # the seat's user an ACL). all: capture nodes lose the tag between the two (review
+  # 2026-11-17, P-1); playback, mixer, timer, seq keep it. Device nodes are root:audio 0660.
+  if [[ $MIC_DISABLE == all ]]; then
+    write_file "$rule" 0644 <<'EOF'
+# Written by harden-workstation.sh mic (MIC_DISABLE=all). ALSA capture devices
+# (pcmC<card>D<device>c) lose the uaccess tag 70-uaccess.rules gives every sound node:
+# 73-seat-late.rules gives the logged-in user no ACL on them. Playback works.
+# Undo: delete this file, sudo udevadm control --reload, reboot.
+SUBSYSTEM=="sound", KERNEL=="pcmC[0-9]*D[0-9]*c", TAG-="uaccess"
+EOF
+  elif [[ -e $rule ]]; then
+    backup "$rule"
+    rm -f "$rule"
+    log "removed $rule (MIC_DISABLE=$MIC_DISABLE; the ACL comes back at the next boot)"
+    changed "removed $rule"
+  fi
+  if (( $(section_changes) != c0 )); then
+    udevadm control --reload
+    udevadm trigger --subsystem-match=sound --action=change
+    udevadm settle --timeout=10 || warn "udevadm settle timed out"
+    # a tag once set stays in the udev database until the node is made again (TAGS is
+    # sticky): certain from the next boot
+    log "udev rules reloaded, sound devices updated (capture: certain from the next boot)"
+  fi
+  if [[ $MIC_DISABLE == all ]]; then
+    # an ACL given before the rule stays until the node is made again: removed now
+    # (logind gives seat ACLs only to tagged nodes, at every session switch)
+    for d in "$SND_DIR"/pcmC*D*c; do
+      [[ -c $d ]] || continue
+      acl=$(getfacl -cn -- "$d" 2>/dev/null) || acl=""
+      if [[ $'\n'$acl =~ $'\n'(user|group):[0-9] ]]; then
+        setfacl -b -- "$d"
+        log "$d: ACL removed"; changed "$d ACL removed"
+      fi
+    done
+    if [[ -n $TARGET_USER ]] && in_group "$TARGET_USER" audio; then
+      warn "$TARGET_USER is in group audio: capture devices stay open to it (gpasswd -d $TARGET_USER audio)"
+    fi
+  fi
+
+  if (( c0 == 0 )); then
     :
   elif [[ -n $TARGET_USER ]] && systemctl --user -M "${TARGET_USER}@" restart wireplumber >/dev/null 2>&1; then
     log "WirePlumber restarted for $TARGET_USER"
