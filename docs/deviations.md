@@ -69,6 +69,12 @@ compromise: change the password at once (`sudo passwd <user>` works the same day
 | `accounts_password_pam_modules_in_authselect_profile` | keep Fedora's authselect profile `local` | the rule wants a custom profile copied from `local`; the PAM lines would be the same (faillock, pwhistory, pwquality: features of `local`, set by the `pam` section). A copy gets no fixes from Fedora's updates of `local`, and a broken custom profile can lock out the only sudo account (root is locked). Decision 2026-11-09 | unselect |
 | `sshd_set_keepalive`, `sshd_set_idle_timeout` (also reads the count) | `ClientAliveCountMax 3` (`sshd` section, server masked) | with `ClientAliveInterval 15`: a dead client is dropped after about 45 s; the profile value `1` drops it after one missed reply | value `var_sshd_set_keepalive=3` |
 
+## Not CIS, added (2026-11-23)
+
+| Item | Setting | Reason / cost |
+|------|---------|---------------|
+| homelock | the daily user's unused start places made + immutable, the shell start files immutable as they are; ACL `u:sectop-home` (x on the way, r-x on the folders, nothing on files) | MITRE ATT&CK T1547.013 / T1543.002 / T1546.004: places a program in my session would use to run again. Cost: editing `.bashrc` / `.bash_profile` / `.bash_logout` needs the admin (`sudo chattr -i`, then the section again); no GNOME Shell extension, no user unit / timer, no autostart entry (a Flatpak's "run in background" request too), no user Flatpak install (`exports` locked), no Quadlet user unit. The home shows mode 710 (ACL mask: x for the watch only, group still nothing); `tools/check-accounts.sh` and the accounts section accept that ACL and nothing else |
+
 ## Scanner false positives on Silverblue (verified manually)
 
 | Rule | Why it fails | Verification | Tailoring |

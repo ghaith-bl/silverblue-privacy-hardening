@@ -97,7 +97,7 @@ fi
 
 # created by the first backup of a run only: a run that replaces nothing leaves no folder
 BACKUP_ROOT="/var/backups/hardening/$(date +%Y%m%d-%H%M%S)"
-SECTIONS=(sysctl modules coredump journald gnome sudo pam pwage su accounts services guesttools loopback cron sshd auditd audit-rules perms mic netprivacy mullvad kvmlan browsevm svirt usbguard appunit time autoupdate kargs integrity)
+SECTIONS=(sysctl modules coredump journald gnome sudo pam pwage su accounts services guesttools loopback cron sshd auditd audit-rules perms mic netprivacy mullvad kvmlan browsevm svirt usbguard appunit time autoupdate kargs homelock integrity)
 CUR_SECTION=""      # the section running now (error report, change list)
 CHANGE_LOG=""       # file: one line "<section> TAB <what>" per change (pipelines run
                     # functions in a subshell: a variable would lose their changes)
@@ -244,6 +244,17 @@ enable_unit() {
 }
 
 user_home() { getent passwd "$1" | cut -d: -f6; }
+
+# home_owner_only <home>: mode 700, or 710 whose ACL is the owner + HOME_WATCHER x only
+# (the group-class bits of a file with an ACL are its mask: group itself still ---)
+home_owner_only() {
+  local m acl
+  m=$(stat -c %a -- "$1")
+  [[ $m == 700 ]] && return 0
+  [[ $m == 710 ]] && command -v getfacl >/dev/null || return 1
+  acl=$(getfacl -cp -- "$1" 2>/dev/null | sed '/^$/d' | LC_ALL=C sort | paste -sd' ')
+  [[ $acl == "group::--- mask::--x other::--- user::rwx user:${HOME_WATCHER:-sectop-home}:--x" ]]
+}
 
 # immutable <path>: chattr +i set (first lsattr field holds a lowercase i; no link followed)
 immutable() { [[ ! -L $1 && $(lsattr -d -- "$1" 2>/dev/null) =~ ^[^[:space:]]*i ]]; }
@@ -750,10 +761,11 @@ sec_accounts() {
   fi
 
   # --- homes: owner only (the admin's may be locked from an earlier run: unlocked for
-  # chmod, locked again by admin_home_lock)
+  # chmod, locked again by admin_home_lock). 710 with only sectop's home watch in the ACL
+  # (homelock section: x, so it can reach the start places) counts as owner only
   for f in "$a" "$d"; do
     h=$(user_home "$f")
-    if [[ $(stat -c %a "$h") != 700 ]]; then
+    if ! home_owner_only "$h"; then
       if immutable "$h"; then chattr -i -- "$h"; fi
       chmod 0700 "$h"; log "home of $f -> 0700"; changed "$h mode 0700"
     else
@@ -2136,6 +2148,159 @@ sec_kargs() {
 ## also one by this script, stays yellow in sectop until the admin accepts it:
 ## sudo harden-check --accept (shows every change, y = new baseline). Never accepts by
 ## itself: a new aide.conf (other scope) is accepted the same way. Never fixes anything.
+## Not CIS (step 8b2, 2026-11-23, asked by me; MITRE ATT&CK T1547.013 XDG autostart,
+## T1543.002 systemd service, T1546.004 shell config): the daily user's start places, the
+## places in a home a program can set itself to run again from.
+## - Unused ones (HOME_LOCK_*): made (empty folder, empty file, .inputrc that includes
+##   /etc/inputrc) and immutable, the shell start files as they are: nothing new can be put
+##   there, not by a program in my session, not by me (sudo chattr -i to change: rollback.md)
+## - In use (HOME_WATCH_DIRS: ~/.local/bin, desktop files, ~/.ssh, git, podman): writable
+## - Read access for sectop's home watch (sectop-home@<daily>): ACL entries set as the
+##   daily user (x on the way, r-x on the folders, nothing on files: names + metadata only).
+##   The home shows 710 then (ACL mask), group still nothing. Root never reads a file here
+## - Not covered: renaming a whole parent (~/.config) and making a new one (the watch shows
+##   it: new inode / ctime); a program started from elsewhere (exec allowlist: later, VM test)
+HOME_LOCK_DIRS=(.config/autostart .config/systemd/user .config/systemd/user.control
+                .config/systemd/user.conf.d .config/environment.d .config/user-tmpfiles.d
+                .config/containers/systemd .config/fish .bashrc.d bin
+                .local/share/systemd/user .local/share/dbus-1/services
+                .local/share/gnome-shell/extensions .local/share/nautilus/scripts
+                .local/share/bash-completion .local/share/flatpak/exports)
+HOME_LOCK_FILES=(.bashrc .bash_profile .bash_logout .bash_login .profile .inputrc
+                 .bash_completion .pam_environment .zshrc .zshenv .zprofile .zlogin
+                 .xprofile .xsessionrc .xinitrc .config/bash_completion .config/systemd/user.conf)
+# folder:depth read by the watch (sectop core/homed.py SPOTS), kept writable
+HOME_WATCH_DIRS=(.local/bin:3 .local/share/applications:3 .local/share/mime:1
+                 .local/share/flatpak/overrides:3 .config/git:3 .config/containers:3 .ssh:2
+                 .local/lib:2)
+HOME_WATCHER=sectop-home
+
+# home_chain <home> <rel> <user>: every part of rel that exists is no link and owned by
+# user (a link swapped in would make root lock / change something else)
+home_chain() {
+  local p=$1 part
+  local -a parts
+  IFS=/ read -ra parts <<< "$2"
+  for part in "${parts[@]}"; do
+    p=$p/$part
+    [[ -e $p || -L $p ]] || return 0
+    [[ ! -L $p ]] || return 1
+    [[ $(stat -c %U -- "$p") == "$3" ]] || return 1
+  done
+}
+
+# acl_has <user> <path> <perm>: path's ACL has user:HOME_WATCHER with perm (x / r-x)
+acl_has() {
+  local e
+  e=$(runuser -u "$1" -- getfacl -cp -- "$2" 2>/dev/null | awk -F: -v w="$HOME_WATCHER" \
+      '$1 == "user" && $2 == w { print $3 }')
+  case $3 in
+    x)   [[ $e == *x ]] ;;
+    r-x) [[ $e == r?x ]] ;;
+  esac
+}
+
+# acl_give <user> <path> <perm>: as the user; an immutable path is unlocked for it and
+# locked again (the lock step after it counts its own change)
+acl_give() {
+  local u=$1 f=$2 perm=$3 relock=0
+  acl_has "$u" "$f" "$perm" && return 0
+  if immutable "$f"; then chattr -i -- "$f"; relock=1; fi
+  runuser -u "$u" -- setfacl -m "u:$HOME_WATCHER:${perm//-/}" -- "$f" ||
+    warn "setfacl $f failed"
+  if (( relock )); then chattr +i -- "$f"; fi
+  if [[ $f == "$HOME_HL" ]]; then changed "acl $HOME_WATCHER $perm (home)"
+  else changed "acl $HOME_WATCHER $perm ${f#"$HOME_HL"/}"; fi
+}
+
+# lock <path>: chattr +i unless it is (no link)
+lock() {
+  [[ ! -L $1 ]] || return 0
+  immutable "$1" && return 0
+  if chattr +i -- "$1"; then changed "chattr +i ${1#"$HOME_HL"/}"
+  else warn "chattr +i $1 failed"; fi
+}
+
+sec_homelock() {
+  local u=$TARGET_USER grp e rel depth f p d acl=1 n_l=0 n_w=0
+  local -A ways=()
+  if [[ -z $u ]] || ! id "$u" >/dev/null 2>&1; then warn "no daily user: homelock skipped"; return 0; fi
+  if [[ -n $ADMIN_USER && $u == "$ADMIN_USER" ]]; then
+    log "daily user = admin: its home has the accounts section's lock"; return 0
+  fi
+  HOME_HL=$(user_home "$u")
+  grp=$(id -gn "$u")
+  [[ $HOME_HL == /?* && -d $HOME_HL && ! -L $HOME_HL ]] || { warn "home '$HOME_HL' not found: skipped"; return 0; }
+  command -v chattr >/dev/null && command -v lsattr >/dev/null || { warn "no chattr / lsattr: skipped"; return 0; }
+  command -v runuser >/dev/null || { warn "no runuser: skipped"; return 0; }
+  if ! command -v setfacl >/dev/null || ! command -v getfacl >/dev/null; then
+    warn "no setfacl / getfacl (package acl): no read access for sectop's home watch"; acl=0
+  elif ! id "$HOME_WATCHER" >/dev/null 2>&1; then
+    warn "no user $HOME_WATCHER (sectop install.sh --desktop-user $u makes it): ACL part skipped, run again after"
+    acl=0
+  fi
+
+  # --- unused places: made as the user (what a user makes cannot harm root), then locked
+  for rel in "${HOME_LOCK_DIRS[@]}" "${HOME_LOCK_FILES[@]}"; do
+    f=$HOME_HL/$rel
+    home_chain "$HOME_HL" "$rel" "$u" || { warn "$f: a link or not $u's on the way: skipped, look at it"; continue; }
+    if [[ -e $f ]]; then continue; fi
+    if [[ " ${HOME_LOCK_DIRS[*]} " == *" $rel "* ]]; then
+      runuser -u "$u" -- mkdir -p -m 0700 -- "$f"
+    else
+      runuser -u "$u" -- mkdir -p -- "$(dirname "$f")"
+      case $rel in
+        .inputrc) printf '$include /etc/inputrc\n' ;;
+        .bashrc|.bash_profile|.bash_logout) if [[ -f /etc/skel/$rel ]]; then cat "/etc/skel/$rel"; fi ;;
+      esac | runuser -u "$u" -- tee -- "$f" >/dev/null
+      runuser -u "$u" -- chmod 0640 -- "$f"
+    fi
+    changed "made ${f#"$HOME_HL"/}"
+  done
+
+  # --- read access for the watch: x on every folder on the way, r-x on the folders
+  if (( acl )); then
+    for e in "${HOME_LOCK_DIRS[@]}" "${HOME_LOCK_FILES[@]}" "${HOME_WATCH_DIRS[@]%%:*}"; do
+      d=$(dirname "$e")
+      while [[ $d != . ]]; do ways[$d]=1; d=$(dirname "$d"); done
+    done
+    acl_give "$u" "$HOME_HL" x
+    for rel in $(printf '%s\n' "${!ways[@]}" | sort); do
+      f=$HOME_HL/$rel
+      [[ -d $f && ! -L $f ]] && home_chain "$HOME_HL" "$rel" "$u" || continue
+      acl_give "$u" "$f" x
+    done
+    for e in "${HOME_LOCK_DIRS[@]/%/:3}" "${HOME_WATCH_DIRS[@]}"; do
+      rel=${e%%:*} depth=${e##*:}
+      f=$HOME_HL/$rel
+      [[ -d $f && ! -L $f ]] && home_chain "$HOME_HL" "$rel" "$u" || continue
+      while IFS= read -r -d '' p; do
+        acl_give "$u" "$p" r-x
+      done < <(runuser -u "$u" -- find "$f" -maxdepth "$((depth - 1))" -type d -print0)
+    done
+  fi
+
+  # --- lock: the folders with what is in them (files; links cannot be, their folder holds
+  # them), the files
+  for rel in "${HOME_LOCK_DIRS[@]}"; do
+    f=$HOME_HL/$rel
+    [[ -d $f && ! -L $f ]] && home_chain "$HOME_HL" "$rel" "$u" || continue
+    while IFS= read -r -d '' p; do lock "$p"; done < <(find "$f" -mindepth 1 \( -type f -o -type d \) -print0)
+    lock "$f"; n_l=$((n_l + 1))
+  done
+  for rel in "${HOME_LOCK_FILES[@]}"; do
+    f=$HOME_HL/$rel
+    [[ -f $f && ! -L $f ]] && home_chain "$HOME_HL" "$rel" "$u" || continue
+    lock "$f"; n_l=$((n_l + 1))
+  done
+  for e in "${HOME_WATCH_DIRS[@]}"; do [[ -d $HOME_HL/${e%%:*} ]] && n_w=$((n_w + 1)); done
+  log "home of $u: $n_l start places immutable (change one: sudo chattr -i <path>, then this"
+  log "  section again); $n_w in use, watched by sectop (sectop-home@$u, group $grp untouched)"
+  if (( acl )); then
+    log "first list / after a change: sudo ./install.sh --home-accept (sectop clone, as the admin)"
+  fi
+}
+
 sec_integrity() {
   local src conf=/etc/aide.conf tool=/usr/local/sbin/harden-check state=/var/lib/harden-check
   local unit=/etc/systemd/system/aidecheck.service timer=/etc/systemd/system/aidecheck.timer
@@ -2329,6 +2494,7 @@ run_sections() {
       time)        sec_time ;;
       autoupdate)  sec_autoupdate ;;
       kargs)       sec_kargs ;;
+      homelock)    sec_homelock ;;
       integrity)   sec_integrity ;;
       *)           warn "unknown section: $s" ;;
     esac

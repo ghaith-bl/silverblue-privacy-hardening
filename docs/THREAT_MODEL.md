@@ -122,7 +122,7 @@ studying, testing and adding, and this page changes with it.
 | # | Capability | Covered |
 |---|------------|---------|
 | A1 | web content: trackers, fingerprinting, browser exploits | yes: browser hardening, browsevm for unknown links |
-| A2 | malware in my daily session, no root | partly: no sudo, ptrace off, firewall per program scope, kernel hardening against the step to root; what my daily user can read (files, browser profiles, the unlocked keyring) is open to it |
+| A2 | malware in my daily session, no root | partly: no sudo, ptrace off, firewall per program scope, kernel hardening against the step to root; the start places in my home it could use to run again are locked or watched (homelock, sectop home watch); what my daily user can read (files, browser profiles, the unlocked keyring) is open to it |
 | A3 | the local network: public Wi-Fi, router, other devices | yes: inbound drop, no LAN traffic outside the tunnel, no LLMNR / mDNS / hostname |
 | A4 | network observers (ISP, upstream): metadata, DNS, time | partly: they see an encrypted tunnel to the VPN, its size and timing |
 | A5 | service providers, data brokers: linking identities | partly: separate profiles, fingerprint-resistant browsers; a login links sessions whatever the network does |
@@ -213,6 +213,15 @@ Tor, Qubes and Tails list the same kind of limits.
   both planned: a process the script leaves running until I log out or reboot, and the
   admin's own clones of these repos (a changed file there runs with sudo later). Root
   in the end comes from the review, not from these locks
+- daily home start places (homelock, 2026-11-23): the unused ones are immutable (autostart,
+  user units, environment.d, D-Bus services, shell files, ...); the ones in use
+  (~/.local/bin, desktop files, ~/.ssh, git config, podman) only watched: sectop's
+  sectop-home@ unit, a system user, not mine, so malware in my session can change a place
+  or take the watch's read access away (both shown) but cannot write the report or stop
+  it. Open: a program started from anywhere else in the home (Downloads, a flatpak's
+  data); renaming a whole parent folder (~/.config) and making a new one (shown, not
+  stopped). Next: an exec allowlist (fapolicyd, or an SELinux confined daily user with
+  `user_exec_content` off) after a VM test: Podman, toolbox and kind must still work
 - browsevm viewer (beta): the sound socket it needs for the VM's sound would also let a
   taken-over viewer listen to what other programs play (not the microphone: off); no
   system-call filter (seccomp) yet

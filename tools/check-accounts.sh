@@ -188,6 +188,12 @@ main() {
   for u in "$ADMIN" "$DAILY"; do
     home=$(getent passwd "$u" | cut -d: -f6)
     mode=$(stat -c '%a %U' "$home" 2>/dev/null)
+    # 710 + ACL = owner + sectop's home watch (x only: homelock section) is owner only too
+    if [[ $mode == "710 $u" ]] && command -v getfacl >/dev/null &&
+       [[ $(getfacl -cp -- "$home" 2>/dev/null | sed '/^$/d' | LC_ALL=C sort | paste -sd' ') == \
+          "group::--- mask::--x other::--- user::rwx user:sectop-home:--x" ]]; then
+      mode="700 $u"
+    fi
     expect "home $u" "$mode" "700 $u"
   done
 

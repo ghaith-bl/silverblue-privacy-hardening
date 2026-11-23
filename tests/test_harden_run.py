@@ -221,5 +221,101 @@ class Run(unittest.TestCase):
         self.assertRegex(out, r'sysctl +no change')
 
 
+class HomeLock(Run):
+    """homelock section (step 8b2): unused start places made + immutable, the watch's
+    read access by ACL as the user. chattr / lsattr / setfacl / getfacl / runuser are
+    stand-ins (flags and ACL entries in two files): nothing real is locked here."""
+
+    FAKES = r'''
+        W=$(id -un)                          # the watch user: any existing name works
+        HOME_WATCHER=$W
+        FL="$D/flags" ACLS="$D/acls"; touch "$FL" "$ACLS"
+        user_home() { echo "$D/home"; }
+        runuser() { [[ $1 == -u ]] || return 9; shift 2; [[ $1 == -- ]] && shift; "$@"; }
+        lsattr() { local p=${@: -1}; if grep -qxF -- "$p" "$FL"; then echo "----i---- $p"; else echo "--------- $p"; fi; }
+        chattr() { local op=$1 p=${@: -1}; [[ -L $p ]] && return 1
+                   grep -vxF -- "$p" "$FL" > "$FL.t" || true; mv "$FL.t" "$FL"
+                   [[ $op == +i ]] && echo "$p" >> "$FL"; return 0; }
+        setfacl() { local spec=$2 p=${@: -1}; grep -qxF -- "$p" "$FL" && return 1
+                    printf '%s\t%s\n' "$p" "${spec##*:}" >> "$ACLS"; }
+        getfacl() { local p=${@: -1}; echo "user::rwx"
+                    awk -F '\t' -v p="$p" -v w="$W" '$1 == p { e = $2 } END { if (e != "")
+                      print "user:" w ":" (e == "rx" ? "r-x" : "--x") }' "$ACLS"; }
+    '''
+
+    def setUp(self):
+        super().setUp()
+        self.h = os.path.join(self.d, 'home')
+        os.makedirs(os.path.join(self.h, '.config/systemd/user'))
+        os.symlink('/dev/null', os.path.join(self.h, '.config/systemd/user/tracker.service'))
+        os.makedirs(os.path.join(self.h, '.local/bin'))
+        write(os.path.join(self.h, '.local/bin/tool'), 'x')
+        write(os.path.join(self.h, '.bashrc'), '# mine\n')
+        os.makedirs(os.path.join(self.d, 'elsewhere'))
+        os.symlink(os.path.join(self.d, 'elsewhere'), os.path.join(self.h, '.bashrc.d'))
+
+    def run_lock(self):
+        return self.bash(f'''D="{self.d}"
+            {self.FAKES}
+            TARGET_USER=$(id -un) ADMIN_USER=""
+            run_sections homelock
+            ''')
+
+    def test_lock_and_access(self):
+        rc, out = self.run_lock()
+        self.assertEqual(rc, 0, out)
+        h = self.h
+        flags = read(os.path.join(self.d, 'flags')).splitlines()
+        for rel in ('.bashrc', '.profile', '.inputrc', '.config/autostart',
+                    '.config/systemd/user', '.local/share/dbus-1/services', 'bin'):
+            self.assertIn(os.path.join(h, rel), flags, rel)
+        self.assertNotIn(os.path.join(h, '.config/systemd/user/tracker.service'), flags)
+        self.assertNotIn(os.path.join(h, '.local/bin'), flags)        # in use: writable
+        self.assertEqual(read(os.path.join(h, '.bashrc')), '# mine\n')  # kept as it is
+        self.assertEqual(read(os.path.join(h, '.inputrc')), '$include /etc/inputrc\n')
+        self.assertEqual(read(os.path.join(h, '.profile')), '')
+        self.assertEqual(os.stat(os.path.join(h, '.profile')).st_mode & 0o777, 0o640)
+        self.assertEqual(os.stat(os.path.join(h, '.config/autostart')).st_mode & 0o777, 0o700)
+        # a link on the way: not followed, not locked, said
+        self.assertIn('.bashrc.d: a link', out)
+        self.assertNotIn(os.path.join(self.d, 'elsewhere'), flags)
+        acls = dict(ln.split('\t') for ln in read(os.path.join(self.d, 'acls')).splitlines())
+        self.assertEqual(acls[h], 'x')
+        self.assertEqual(acls[os.path.join(h, '.config')], 'x')
+        self.assertEqual(acls[os.path.join(h, '.local/share')], 'x')
+        self.assertEqual(acls[os.path.join(h, '.config/autostart')], 'rx')
+        self.assertEqual(acls[os.path.join(h, '.local/bin')], 'rx')
+        self.assertEqual(acls[os.path.join(h, '.config/systemd/user')], 'rx')
+        self.assertNotIn(os.path.join(h, '.bashrc'), acls)            # never on files
+        self.assertNotIn(os.path.join(h, '.local/bin/tool'), acls)
+        self.assertRegex(out, r'homelock +\d+ change')
+        rc, out = self.run_lock()
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r'homelock +no change')
+
+    def test_no_watch_user(self):
+        rc, out = self.bash(f'''D="{self.d}"
+            {self.FAKES}
+            HOME_WATCHER=no-such-user-x
+            TARGET_USER=$(id -un) ADMIN_USER=""
+            run_sections homelock
+            ''')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('ACL part skipped', out)
+        self.assertEqual(read(os.path.join(self.d, 'acls')), '')
+        self.assertIn(os.path.join(self.h, '.bashrc'),
+                      read(os.path.join(self.d, 'flags')).splitlines())
+
+    def test_admin_is_daily(self):
+        rc, out = self.bash(f'''D="{self.d}"
+            {self.FAKES}
+            TARGET_USER=$(id -un) ADMIN_USER=$(id -un)
+            run_sections homelock
+            ''')
+        self.assertEqual(rc, 0, out)
+        self.assertIn("accounts section's lock", out)
+        self.assertEqual(read(os.path.join(self.d, 'flags')), '')
+
+
 if __name__ == '__main__':
     unittest.main()

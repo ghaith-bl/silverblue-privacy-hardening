@@ -15,6 +15,13 @@ sudo systemctl disable --now aidecheck.timer     # integrity: no daily check (da
                                                  # rpm-ostree uninstall aide + reboot: package gone)
 sudo cp /var/lib/aide/aide.db.gz.prev /var/lib/aide/aide.db.gz   # integrity: the baseline before the last accept
 sudo semodule -r harden_aide_efi                 # integrity: aide's fstatfs on /boot/efi denied again
+sudo chattr -i /var/home/<daily>/.bashrc         # homelock: edit one locked start file / folder,
+                                                 # then the section again (locks it), then
+                                                 # sudo ./install.sh --home-accept (sectop)
+sudo chattr -R -i /var/home/<daily>/.config/autostart   # homelock: a folder with what is in it
+                                                 # (all of them: HOME_LOCK_* in the script)
+setfacl -R -x u:sectop-home ~                    # homelock, as the daily user: the watch's
+                                                 # read access gone (sectop shows unreadable)
 sudo rm /etc/wireplumber/wireplumber.conf.d/90-disable-mic.conf
 systemctl --user restart wireplumber
 sudo rm /etc/NetworkManager/conf.d/90-privacy.conf /etc/systemd/resolved.conf.d/90-privacy.conf

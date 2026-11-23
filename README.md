@@ -150,6 +150,10 @@ sudo ./harden-workstation.sh time     # VPN connected; then chronyc -N authdata
 sudo ./harden-workstation.sh autoupdate  # OS staged daily (applied at reboot), Flatpaks daily
 sudo grub2-setpassword                # by hand, before kargs (user root at the menu)
 sudo ./harden-workstation.sh kargs    # reboot: LUKS unlock, Wi-Fi, VPN, a VM
+sudo ./install.sh --desktop-user <daily>   # sectop (its clone, from the admin) before homelock:
+                                      # makes the home watch's user sectop-home
+sudo DAILY_USER=<daily> ./harden-workstation.sh homelock   # daily start places locked / watched
+sudo ./install.sh --home-accept       # sectop: first list of the home watch
 sudo rpm-ostree install aide && systemctl reboot
 sudo ./harden-workstation.sh integrity   # last: the AIDE baseline of everything above
 sudo harden-check --accept            # after a change you made or an OS update: shows
@@ -189,6 +193,7 @@ sudo harden-check --accept            # after a change you made or an OS update:
 | `time`        | chrony: NTS only (Netnod + PTB), `authselectmode require`, `minsources 2`, no pool, no DHCP NTP | no time sync without the tunnel |
 | `autoupdate`  | CIS Controls v8.1 7.3 / 7.4: `/etc/rpm-ostreed.conf` `AutomaticUpdatePolicy=stage` + `rpm-ostreed-automatic.timer` (OS + layered packages downloaded daily, applied at the next boot); `flatpak-update-system.timer` + global user `flatpak-update-user.timer` (daily); `fwupd-refresh.timer` every second day (firmware metadata only); fwupd reports to LVFS off | updates arrive without asking; reboot to apply the OS one (`rpm-ostree status`); firmware / dbx: `fwupdmgr get-updates`, by hand |
 | `kargs`       | not CIS: `KERNEL_ARGS` via `rpm-ostree kargs` (next boot): AF_ALG off, random page allocator, no initramfs shell, freed memory zeroed, strict IOMMU, hashed pointers, no forced writes through /proc/<pid>/mem, signed modules only, IOMMU on, no debugfs, no writes to mounted block devices | no Adiantum / Serpent / Twofish LUKS, BlueZ mesh, iwd; boot failure halts; no debugfs |
+| `homelock`    | not CIS (MITRE ATT&CK T1547.013, T1543.002, T1546.004): the daily user's start places. Unused ones made (empty folder / file; `.inputrc` includes `/etc/inputrc`) and immutable: autostart, user units + manager config, environment.d, user-tmpfiles.d, Quadlet, D-Bus services, GNOME Shell extensions, Files scripts, completions, fish, `~/.bashrc.d`, `~/bin`, user Flatpak exports, X / zsh / pam_env files; `.bashrc`, `.bash_profile`, `.bash_logout` immutable as they are. In use (`~/.local/bin`, desktop files, `~/.ssh`, git config, podman config, python user site): writable. ACL entries as the daily user so sectop's home watch (`sectop-home@`, user sectop-home) can list them: names + metadata, never content | sectop yellow on any change until `sudo ./install.sh --home-accept`; to edit a shell file: `sudo chattr -i` it, then the section again; home mode shows 710 |
 | `integrity`   | AIDE (package layered by hand): `/etc` (content, mode, owner, label; no times: every deployment copies /etc), `/boot`, `/var/usrlocal`, root's home, crontabs, the audit tools; `aidecheck.timer` (5 min after boot, daily) runs `aide --check`, then `harden-check`: boot kernel + initramfs = the image's copies, sudoers, auditd.conf, loaded = rules.d, no system account with a password, firewalld zone, `bpf_jit_harden`, applied sections. Result for sectop (posture `harden-check`); never fixes, never accepts by itself. Local SELinux module `harden_aide_efi`: aide may stat the EFI partition's file system (one rule) | sectop yellow after any change until `sudo harden-check --accept` |
 
 Reasons and costs of every not-CIS choice: [docs/deviations.md](docs/deviations.md).
