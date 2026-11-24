@@ -43,6 +43,21 @@ is locked, so `NET_FLOWS_DIR=~/admin-inbox/net-flows` there (default `~/net-flow
 | hostfw mode | `sudo hostfw status` | `enforce` |
 | fixtures | `python3 -I -B -m unittest discover -s tests -p test_net_flows.py` (CI) | the evaluation, no scan |
 
+## IDS (2026-11-24, admin 74)
+
+| Check | Command | Expected |
+|-------|---------|----------|
+| package | `rpm -q suricata nmap` | versions (layered) |
+| service | `systemctl status suricata`; `journalctl -u suricata -b \| grep -i 'engine started'` | active; engine started |
+| watched | `sudo harden-ids status` | uplink + present VM bridges, never `wg0-mullvad`; capture sockets of user suricata on each; net.yaml up to date |
+| rules | same | ET Open N rules (date), local rules 9 |
+| local rules | `tests/ids-rules.sh` (no root, no network) | every check PASS |
+| user | `ps -o user= -C Suricata-Main` | suricata |
+| sandbox | `systemd-analyze security suricata.service harden-ids-update.service` | exposure lower than Fedora's unit |
+| SELinux | `sudo ausearch -m AVC -ts boot -c Suricata-Main`; same `-c suricata-update` | none |
+| RAM | `sudo harden-ids status` (memory now / peak) | numbers in the admin 74 result |
+| privacy | `sudo grep -cE '"(payload\|packet\|http\|dns\|tls)":' /var/log/suricata/harden-ids/eve.json` | 0 |
+
 ## Integrity (2026-11-22)
 
 | Check | Command | Expected |

@@ -180,6 +180,18 @@ compromise: change the password at once (`sudo passwd <user>` works the same day
   sound socket can record other programs' sound. `BROWSEVM_RELAY=0` /
   `BROWSEVM_SANDBOX=0` turn one off per start
 
+## Suricata IDS (not CIS, ids section, 2026-11-24)
+- What: Suricata (Fedora's package, layered with nmap in one transaction) watches the
+  uplink and the VM bridges, IDS only (docs/ids.md). Never the tunnel: no inspection or
+  log of what goes through the VPN.
+- Cost: two layered packages (rpm-ostree, updated with the OS); RAM (measured:
+  docs/verification.md); a restart (rules compile) on every network change; ET Open
+  downloaded weekly through the tunnel (Proofpoint sees a Mullvad exit address and a plain
+  User-Agent). DHCP records name other devices' MACs on the network: kept 7 days, local.
+- Not covered on purpose: other devices' own traffic on Wi-Fi (not visible to a client),
+  QUIC / raw TCP leaks (look like Mullvad's obfuscation; hostfw counts them), rogue DHCP /
+  gateway MAC as rules (sectop, step 11b).
+
 ## Brave: RPM, not Flatpak (not CIS)
 - Brave's own RPM repo, layered (browsers/README.md). Why: Brave's own build with the
   browser's own sandbox, fully native; Brave recommends its repos over the Flathub

@@ -18,6 +18,9 @@ sudo systemctl disable --now aidecheck.timer     # integrity: no daily check (da
                                                  # rpm-ostree uninstall aide + reboot: package gone)
 sudo cp /var/lib/aide/aide.db.gz.prev /var/lib/aide/aide.db.gz   # integrity: the baseline before the last accept
 sudo semodule -r harden_aide_efi                 # integrity: aide's fstatfs on /boot/efi denied again
+sudo systemctl disable --now suricata.service harden-ids-update.timer   # ids: Suricata off (or
+                                                 # IDS="off" + the section); files stay;
+                                                 # rpm-ostree uninstall suricata nmap + reboot: gone
 sudo chattr -i /var/home/<daily>/.bashrc         # homelock: edit one locked start file / folder,
                                                  # then the section again (locks it), then
                                                  # sudo ./install.sh --home-accept (sectop)
