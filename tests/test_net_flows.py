@@ -144,6 +144,16 @@ class NetFlowsEvaluate(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertTrue(any("hostfw mode" in ln for ln in self.lines(out, "FAIL")), out)
 
+    def test_vm_sudo_refused_one_line(self):
+        # sudo in the VM refused: no scan ran -> a short report naming the cause
+        self.files = {k: v for k, v in self.files.items() if not k.endswith(".gnmap") and k != "remote.done"}
+        self.files["scan.log"] = "sudo: Authentication failed, try again.\n" * 3
+        rc, out = self.run_eval()
+        self.assertEqual(rc, 1)
+        fails = self.lines(out, "FAIL")
+        self.assertTrue(any("VM sudo" in ln and "3 time(s)" in ln for ln in fails), out)
+        self.assertLessEqual(len(fails), 2, out)
+
     def test_hostile_text_is_not_run(self):
         # the VM's files are data: a line that looks like a command stays text
         marker = os.path.join(self.d, "pwned")

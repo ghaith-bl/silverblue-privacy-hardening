@@ -185,7 +185,17 @@ evaluate() {
   esac
   if [[ $vmsrc == ok ]]; then pass "scan source" "VM inside the $BR_IF network (laptop there: $hbr)"
   else fail "scan source" "VM is not on the $BR_IF network (${vmsrc:-?})"; fi
-  if [[ ! -f $W/remote.done ]]; then fail "VM run" "did not finish (no remote.done)"; fi
+  if [[ ! -f $W/remote.done ]]; then
+    fail "VM run" "did not finish (no remote.done)"
+    if ! compgen -G "$W/*.gnmap" >/dev/null; then
+      # nothing scanned (sudo in the VM refused, no nmap, ...): one line, not 20 misleading ones
+      n=$(grep -ciE 'authentication failed|incorrect password|sorry, try again' "$W/scan.log" 2>/dev/null)
+      if (( ${n:-0} > 0 )); then fail "VM sudo" "password refused $n time(s): the VM user's password"
+      else fail "VM scans" "none ran: see the VM log above"; fi
+      printf '\n%s PASS, %s FAIL, %s SKIP  (%s)\n' "$PASSES" "$FAILS" "$SKIPS" "$W"
+      return 1
+    fi
+  fi
 
   check_scan tcp-br     "BR tcp"            '^open$'       "53/tcp" ""
   check_scan sport53-br "BR tcp sport 53"   '^open$'       "53/tcp" ""
@@ -389,19 +399,27 @@ step "counters before"
 counters before
 (( ROOT )) && echo "$(wc -l < "$W/counters-before.txt") counters read" || echo "skipped (not the admin)"
 
-step "scan from the VM (its sudo asks once; progress every 30 s)"
+step "scan from the VM (its sudo asks once; progress every 30 s, on the console)"
 RD=$(vm 'mktemp -d') || die "no temp dir in the VM"
 [[ $RD =~ ^/tmp/tmp\.[A-Za-z0-9]{10}$ ]] || { RD=""; die "VM temp dir looks wrong"; }
 { declare -f remote_scan; printf '%s\n' 'remote_scan "$@"'; } |
   vmin "cat > '$RD/scan.sh'" || die "upload to the VM failed"
 args="$RD $HBR ${HUP:--} ${HVPN:--} $GW $GW_PORTS $QUICK $INET $UDPX ${H6[*]}"
 [[ $args =~ ^[A-Za-z0-9/.:,\ _-]+$ ]] || die "arguments: unexpected characters"
-# prompt ends with a newline: a line-based output filter (admin-run privacy filter) still shows it
-vmt "sudo -p '[VM sudo] password for %u (then Enter):
-' bash '$RD/scan.sh' $args" || echo "VM part ended with an error (results below say what is missing)"
+# The VM's sudo prompt has no newline (sudo-rs on Ubuntu 26.04 also rewrites -p): through a
+# line-based filter (admin-run's privacy filter) it would not show. So this one ssh session talks
+# to the console directly; the VM keeps its own log (scan.log), printed below after cleaning.
+echo "NEXT: the VM's sudo asks the password of your user INSIDE the VM"
+echo "      (not the key passphrase, not the admin password). Type it, press Enter."
+remote="sudo bash '$RD/scan.sh' $args 2>&1 | tee '$RD/scan.log'"
+if { : > /dev/tty; } 2>/dev/null; then
+  vmt "$remote" > /dev/tty 2>&1 < /dev/tty || true
+else
+  vmt "$remote" || true
+fi
 
 step "results from the VM"
-names=(remote.done gw-ping.txt v6-self.txt v6-responders.txt inet.txt)
+names=(scan.log remote.done gw-ping.txt v6-self.txt v6-responders.txt inet.txt)
 for f in tcp sport53 udp udpx; do for n in br up vpn; do names+=("$f-$n.gnmap"); done; done
 names+=(ack-br.gnmap frag-br.gnmap gw.gnmap)
 for ((i = 1; i <= ${#H6[@]}; i++)); do names+=("tcp6-$i.gnmap"); done
@@ -414,6 +432,10 @@ for f in "${names[@]}"; do
   fi
 done
 echo "$got files"
+if [[ -f $W/scan.log ]]; then
+  echo "-- VM log (printable characters only: the VM is not trusted)"
+  LC_ALL=C tr -cd '\11\12\40-\176' < "$W/scan.log" | tail -n 200 | sed 's/^/  vm| /'
+fi
 
 step "counters after"
 counters after
