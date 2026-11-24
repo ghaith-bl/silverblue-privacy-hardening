@@ -161,8 +161,12 @@ Tests run after hardening + reboot. All passed.
 | AF_ALG socket fails | `python3 -I -c 'import socket; socket.socket(socket.AF_ALG, socket.SOCK_SEQPACKET)'` | `OSError: [Errno 97] Address family not supported by protocol` |
 | hardening kargs | `grep -oE 'page_alloc.shuffle=[^ ]*\|rd.shell=[^ ]*\|rd.emergency=[^ ]*' /proc/cmdline` | `page_alloc.shuffle=1`, `rd.shell=0`, `rd.emergency=halt` |
 | memory / DMA kargs | `grep -oE 'init_on_free=[^ ]*\|iommu.strict=[^ ]*' /proc/cmdline`; `journalctl -k -b -g 'mem auto-init\|TLB invalidation'` | `init_on_free=1`, `iommu.strict=1`; `heap free:on`, `strict mode` |
-| KSPP kargs | `grep -oE 'hash_pointers=[^ ]*\|proc_mem.force_override=[^ ]*\|module.sig_enforce=[^ ]*\|intel_iommu=[^ ]*\|debugfs=[^ ]*\|bdev_allow_write_mounted=[^ ]*' /proc/cmdline` | the six args |
-| IOMMU on | `ls /sys/class/iommu`; `journalctl -k -b -g 'DMAR: IOMMU enabled'` | `dmar0` (or more); the line |
+| KSPP kargs | `grep -oE 'hash_pointers=[^ ]*\|proc_mem.force_override=[^ ]*\|module.sig_enforce=[^ ]*\|debugfs=[^ ]*\|bdev_allow_write_mounted=[^ ]*' /proc/cmdline` | the five args |
+| IOMMU kargs | `grep -oE 'intel_iommu=[^ ]*\|amd_iommu=[^ ]*\|iommu.passthrough=[^ ]*\|efi=[^ ]*' /proc/cmdline` | `intel_iommu=on` (AMD: `amd_iommu=force_isolation`), `iommu.passthrough=0`, `efi=disable_early_pci_dma` |
+| IOMMU on | `ls /sys/class/iommu`; `sudo journalctl -k -b -g 'DMAR: IOMMU enabled\|AMD-Vi'` | `dmar0` (or more); the line |
+| IRQ remapping | `sudo journalctl -k -b -g 'remapping'`; `grep -c 'IR-' /proc/interrupts` | `Enabled IRQ remapping in x2apic mode` (AMD: `Interrupt remapping enabled`); more than 0 |
+| IOMMU groups | `cat /sys/kernel/iommu_groups/*/type \| sort \| uniq -c` | only `DMA` (not `identity`, not `DMA-FQ`) |
+| early PCI DMA off | `grep -o 'efi=[^ ]*' /proc/cmdline` (the EFI stub prints to the firmware console, not the kernel log); boot, LUKS unlock, USB keyboard at GDM, Wi-Fi, NVMe | `efi=disable_early_pci_dma`; all work |
 | debugfs off | `grep -c debugfs /proc/mounts`; `test -d /sys/kernel/debug && echo present \|\| echo absent` | `0`; `absent` (sys-kernel-debug.mount skipped by its condition, not failed) |
 | io_uring refused | `python3 -I -c 'import ctypes; l = ctypes.CDLL(None, use_errno=True); print(l.syscall(425, 1, ctypes.create_string_buffer(120)), ctypes.get_errno())'` | `-1 1` (EPERM) |
 | io_uring tries since boot | `sudo ausearch -k io-uring -ts boot -i \| grep -o 'exe=[^ ]*' \| sort \| uniq -c` | only the test above (python3) |

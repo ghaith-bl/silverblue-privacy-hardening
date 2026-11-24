@@ -68,8 +68,15 @@ UPLINK_IPV6="off"            # netprivacy section: "off" = IPv6 off on every Wi-
                              # a new network's on its first connect (dispatcher); "keep" = as set
 KERNEL_ARGS=(initcall_blacklist=af_alg_init page_alloc.shuffle=1 rd.shell=0 rd.emergency=halt
              init_on_free=1 iommu.strict=1 hash_pointers=always proc_mem.force_override=never
-             module.sig_enforce=1 intel_iommu=on debugfs=off bdev_allow_write_mounted=0)
+             module.sig_enforce=1 debugfs=off bdev_allow_write_mounted=0)
                              # kargs section; () = add none
+IOMMU="vendor"               # kargs section: "vendor" = IOMMU on for this CPU (Intel intel_iommu=on,
+                             # AMD amd_iommu=force_isolation) + iommu.passthrough=0 (no device
+                             # skips it); "no" = add none
+EARLY_PCI_DMA_OFF="yes"      # kargs section: "yes" = efi=disable_early_pci_dma (EFI boot only): no
+                             # PCI device may start DMA between the firmware and the IOMMU being
+                             # up; some machines do not boot with it (rollback: previous entry
+                             # in GRUB); "no" = add none
 PTRACE_SCOPE=3               # sysctl section: 2 = only root may trace (gdb / strace need sudo);
                              # 3 = nobody, root included, one-way until reboot
 MULLVAD_SOCKET_GROUP="mullvad"  # mullvad section: only this group may use the Mullvad CLI / GUI
@@ -2288,9 +2295,49 @@ EOF
 #   slowdown (desktop, Steam), podman start +0.08 s, IOMMU faults 0.
 #   Idea source: secureblue default kargs, minus what the Fedora kernel config already
 #   does (init_on_alloc, slab_nomerge, randomize_kstack_offset).
+#   IOMMU (KSPP, 2026-11-24): the arg of this CPU's vendor, iommu.passthrough=0 (no
+#   device gets the identity map, also if a kernel build changes the default) and
+#   efi=disable_early_pci_dma (the EFI stub clears bus mastering on PCI bridges: no DMA
+#   from a device before the kernel's IOMMU is up). Check after boot: kernel log
+#   "DMAR: IOMMU enabled" / "AMD-Vi: ... Interrupt remapping enabled", "IRQ remapping",
+#   every /sys/kernel/iommu_groups/*/type = DMA (docs/verification.md).
+CPUINFO=/proc/cpuinfo
+EFI_DIR=/sys/firmware/efi
+
+# cpu_vendor: vendor_id of the first CPU (GenuineIntel, AuthenticAMD, ...) or empty
+cpu_vendor() {
+  local line
+  while IFS= read -r line; do
+    if [[ $line =~ ^vendor_id[[:space:]]*:[[:space:]]*([A-Za-z]+) ]]; then
+      echo "${BASH_REMATCH[1]}"; return 0
+    fi
+  done < "$CPUINFO"
+  return 0
+}
+
 sec_kargs() {
-  if (( ${#KERNEL_ARGS[@]} == 0 )); then log "KERNEL_ARGS empty: nothing to add"; return; fi
-  add_karg "${KERNEL_ARGS[@]}"
+  local vendor
+  local -a karg_list=("${KERNEL_ARGS[@]}")
+  case $IOMMU in
+    vendor)
+      vendor=$(cpu_vendor)
+      case $vendor in
+        GenuineIntel) karg_list+=(intel_iommu=on) ;;
+        AuthenticAMD) karg_list+=(amd_iommu=force_isolation) ;;
+        *) warn "CPU vendor '${vendor:-unknown}': no IOMMU arg for it (add one by hand)" ;;
+      esac
+      karg_list+=(iommu.passthrough=0) ;;
+    no) ;;
+    *) die "IOMMU must be vendor or no" ;;
+  esac
+  case $EARLY_PCI_DMA_OFF in
+    yes) if [[ -d $EFI_DIR ]]; then karg_list+=(efi=disable_early_pci_dma)
+         else log "not an EFI boot: efi=disable_early_pci_dma not added"; fi ;;
+    no) ;;
+    *) die "EARLY_PCI_DMA_OFF must be yes or no" ;;
+  esac
+  if (( ${#karg_list[@]} == 0 )); then log "no kernel args wanted: nothing to add"; return; fi
+  add_karg "${karg_list[@]}"
   log "new args work from the next boot; boot or unlock fails: previous entry in GRUB (Esc / Shift)"
 }
 

@@ -95,8 +95,12 @@ sudo rpm-ostree kargs --delete=initcall_blacklist=af_alg_init   # then reboot
 sudo rpm-ostree kargs --delete=page_alloc.shuffle=1 --delete=rd.shell=0 --delete=rd.emergency=halt
 sudo rpm-ostree kargs --delete=init_on_free=1 --delete=iommu.strict=1
 sudo rpm-ostree kargs --delete=hash_pointers=always --delete=proc_mem.force_override=never \
-  --delete=module.sig_enforce=1 --delete=intel_iommu=on --delete=debugfs=off \
+  --delete=module.sig_enforce=1 --delete=debugfs=off \
   --delete=bdev_allow_write_mounted=0                                  # then reboot
+sudo rpm-ostree kargs --delete=intel_iommu=on --delete=iommu.passthrough=0   # IOMMU (AMD:
+                                                 # amd_iommu=force_isolation); IOMMU=no first
+sudo rpm-ostree kargs --delete=efi=disable_early_pci_dma   # EARLY_PCI_DMA_OFF=no first; boot
+                                                 # fails with it: previous entry in GRUB first
 sudo rm /etc/audit/rules.d/70-io-uring.rules     # loads at the next boot (rules.d is what
                                                  # audit-rules.service builds and loads; while
                                                  # locked, augenrules changes nothing)

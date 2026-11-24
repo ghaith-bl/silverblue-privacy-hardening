@@ -286,11 +286,23 @@ Most FAIL rows are Fedora build options (signed Fedora kernel, not changed here)
 - kargs: `hash_pointers=always` (hashed %p in every log, also for root),
   `proc_mem.force_override=never` (no write to read-only memory of a process through
   /proc/<pid>/mem; debuggers may break), `module.sig_enforce=1` (signed modules only even
-  if Secure Boot is switched off in the firmware and lockdown with it), `intel_iommu=on`
-  (on now only through the firmware's DMA opt-in flag; `CONFIG_INTEL_IOMMU_DEFAULT_ON` is
-  not set), `debugfs=off` (`CONFIG_DEBUG_FS_ALLOW_ALL=y`; lockdown already limits it),
+  if Secure Boot is switched off in the firmware and lockdown with it), `debugfs=off` (`CONFIG_DEBUG_FS_ALLOW_ALL=y`; lockdown already limits it),
   `bdev_allow_write_mounted=0` (no direct writes to a block device with a mounted
   filesystem). Undo: `rpm-ostree kargs --delete=...`, reboot.
+- IOMMU (kargs, 2026-11-24, KSPP; `IOMMU=vendor`): the arg of the CPU vendor,
+  `intel_iommu=on` (Intel: on before only through the firmware's DMA opt-in flag;
+  `CONFIG_INTEL_IOMMU_DEFAULT_ON` is not set) or `amd_iommu=force_isolation` (AMD: every
+  device in its own domain), and `iommu.passthrough=0` (no device gets the identity map,
+  also if a kernel build changes the default; with `iommu.strict=1` every group type is
+  `DMA`). Host before (2026-11-24): DMAR on, IRQ remapping x2apic, 16 groups `DMA`,
+  fwupd HSI Iommu + PrebootDma enabled. Check: docs/verification.md "IOMMU".
+- `efi=disable_early_pci_dma` (kargs, trial from 2026-11-24, `EARLY_PCI_DMA_OFF=yes`): the
+  EFI stub clears bus mastering on every PCI bridge before it leaves the firmware, so no
+  device can do DMA in the short window before the kernel's IOMMU is up (the firmware's
+  pre-boot DMA protection ends there). Some machines do not boot with it (a device the
+  boot needs, such as the disk, does DMA too early). After the first boot check: boot,
+  LUKS unlock, USB keyboard at GDM, Wi-Fi, NVMe. Fails: previous entry in GRUB, then
+  `EARLY_PCI_DMA_OFF=no` and `rpm-ostree kargs --delete=efi=disable_early_pci_dma`.
 
 Not taken:
 
@@ -306,5 +318,4 @@ Not taken:
 | `lockdown=confidentiality` | now `integrity` (Secure Boot); confidentiality also blocks kernel memory reads by tracing / eBPF tools: decide with sectop's monitoring plans |
 | `cfi=kcfi` | kernel built without `CONFIG_CFI` (IBT is on) |
 | `kernel.perf_event_paranoid = 3` | needs a distro patch the Fedora kernel does not carry: no effect |
-| `efi=disable_early_pci_dma` | some machines do not boot with it: own trial later, alone |
 | `modprobe.blacklist=thunderbolt` | my decision 2026-11-24: the Thunderbolt 4 port has security level `user`, IOMMU DMA protection and firmware pre-boot DMA protection, no device ever approved; those are enough for a port I do not use |
