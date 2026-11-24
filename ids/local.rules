@@ -1,0 +1,35 @@
+# /etc/suricata/harden-ids/local.rules - harden-workstation.sh section ids (docs/ids.md)
+#
+# This machine's own rules, on top of ET Open. sid 9200001-9200099, msg "HARDEN ...",
+# metadata "harden <kind>": sectop reads the kind (leak and scan = critical, red alert bar).
+# Address groups come from net.yaml (harden-ids sync, follows the network):
+#   LAPTOP_LAN  this laptop's address(es) on the uplink     LAN       the uplink's subnet(s)
+#   VM_NET      the libvirt bridges' subnets                VM_GW     the host's address on them
+#   BROWSE_NET  the browse VM's subnet (browsevm)           VPN_API   Mullvad API (hostfw local.conf)
+#   PRIVATE_NET RFC 1918 + link-local + CGNAT
+# An unknown group (no uplink yet, no browsevm) is 169.254.0.0/32: inside PRIVATE_NET (a negation
+# must lie inside the group it cuts) and never a host's address (reserved).
+# BROWSE_NET is always part of VM_NET (browsevm's subnet is fixed, bridge up or not).
+# Test: tests/ids-rules.sh (a made-up capture through these rules, no network needed).
+
+# --- this laptop scanned / probed from the LAN. Inbound is dropped (firewalld drop zone,
+# hostfw in_lan), Suricata sees the attempt before that. Once per source and minute.
+alert tcp $LAN any -> $LAPTOP_LAN any (msg:"HARDEN scan of this laptop from the LAN (TCP)"; flow:stateless; flags:S,12; threshold:type both, track by_src, count 10, seconds 60; metadata:harden scan; priority:1; sid:9200001; rev:1;)
+alert udp $LAN any -> $LAPTOP_LAN ![67,68,5353] (msg:"HARDEN scan of this laptop from the LAN (UDP)"; threshold:type both, track by_src, count 10, seconds 60; metadata:harden scan; priority:1; sid:9200002; rev:1;)
+alert icmp $LAN any -> $LAPTOP_LAN any (msg:"HARDEN pings to this laptop from the LAN"; itype:8; threshold:type both, track by_src, count 5, seconds 60; metadata:harden probe; priority:2; sid:9200003; rev:1;)
+
+# --- tunnel leak. The uplink carries WireGuard (Mullvad), DHCP, ARP and the Mullvad API (TLS)
+# only: DNS, plain HTTP or other TLS from this laptop there = traffic outside the tunnel.
+# hostfw drops such packets before they leave (out_leak, out_dns): an alert here means that
+# layer failed. VM traffic (VM_NET) is not on the uplink: it is routed into the tunnel.
+# Not covered: QUIC (Mullvad's own QUIC obfuscation looks the same), raw TCP / UDP (its
+# udp2tcp / Shadowsocks obfuscation): hostfw's out_leak counter covers those.
+# Once per source and 5 minutes.
+alert dns !$VM_NET any -> any any (msg:"HARDEN tunnel leak: DNS outside the tunnel"; flow:to_server; threshold:type limit, track by_src, count 1, seconds 300; metadata:harden leak; priority:1; sid:9200010; rev:1;)
+alert http !$VM_NET any -> ![$LAN,$VM_NET] any (msg:"HARDEN tunnel leak: plain HTTP outside the tunnel"; flow:to_server; threshold:type limit, track by_src, count 1, seconds 300; metadata:harden leak; priority:1; sid:9200011; rev:1;)
+alert tls !$VM_NET any -> ![$LAN,$VM_NET,$VPN_API] any (msg:"HARDEN tunnel leak: TLS outside the tunnel (not the Mullvad API)"; flow:to_server; threshold:type limit, track by_src, count 1, seconds 300; metadata:harden leak; priority:1; sid:9200012; rev:1;)
+
+# --- VMs, seen on their bridge before hostfw decides (fwd_vm_lan drops these)
+alert ip $VM_NET any -> $LAN any (msg:"HARDEN VM traffic to the LAN"; threshold:type limit, track by_src, count 1, seconds 300; metadata:harden vm_lan; priority:1; sid:9200020; rev:1;)
+alert ip $BROWSE_NET any -> [$PRIVATE_NET,!$BROWSE_NET] any (msg:"HARDEN browse VM to another private network (host / VMs / LAN)"; threshold:type limit, track by_src, count 1, seconds 300; metadata:harden vm_lan; priority:1; sid:9200021; rev:1;)
+alert tcp $VM_NET any -> $VM_GW !53 (msg:"HARDEN VM probing the host (TCP)"; flow:stateless; flags:S,12; threshold:type both, track by_src, count 5, seconds 60; metadata:harden vm_probe; priority:1; sid:9200022; rev:1;)

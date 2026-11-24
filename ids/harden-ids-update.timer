@@ -1,0 +1,12 @@
+# /etc/systemd/system/harden-ids-update.timer - harden-workstation.sh section ids
+# ET Open once a week (a missed run: at the next boot), at a random hour of the day
+[Unit]
+Description=ET Open rules for Suricata, weekly (harden-ids)
+
+[Timer]
+OnCalendar=weekly
+RandomizedDelaySec=12h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

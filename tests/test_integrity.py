@@ -123,14 +123,14 @@ class Conf(unittest.TestCase):
         for p in ('/etc/NetworkManager/system-connections/x.nmconnection',
                   '/etc/mullvad-vpn/settings.json', '/etc/asusd/fan_curves.ron',
                   '/etc/supergfxd.conf', '/etc/tuned/bootcmdline', '/etc/adjtime',
-                  '/etc/cups/subscriptions.conf.O',
+                  '/etc/cups/subscriptions.conf.O', '/etc/suricata/harden-ids/net.yaml',
                   '/etc/systemd/system.control/user@1000.service.d/50-MemoryMin.conf',
                   '/etc/systemd/system.control/user-60578.slice.d/50-CPUWeight.conf',
                   '/etc/systemd/system.control/user.slice.d/50-MemoryLow.conf'):
             self.assertTrue(names_rule(p), p)
         for p in ('/etc/shadow', '/etc/modprobe.d/supergfxd.conf', '/etc/tuned/tuned-main.conf',
                   '/etc/systemd/system.control/user@1000.service.d/90-other.conf',
-                  '/etc/mullvad-vpn/other.toml'):
+                  '/etc/mullvad-vpn/other.toml', '/etc/suricata/harden-ids/local.rules'):
             self.assertFalse(names_rule(p), p)
 
 

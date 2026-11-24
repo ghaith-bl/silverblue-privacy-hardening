@@ -1,0 +1,472 @@
+#!/usr/bin/python3 -I
+"""harden-ids - the network part of Suricata's config (harden-workstation.sh section ids).
+
+  harden-ids sync [--no-restart] [--wait SEC]
+        Write /etc/suricata/harden-ids/net.yaml for the network this laptop is on now: the
+        uplink (IPv4 default route, not a tunnel or a bridge), the libvirt bridges that exist,
+        their subnets and the host's addresses there. Changed, or suricata.service enabled but
+        not running: restart it (no wait). --no-restart: write only (ExecCondition of
+        suricata.service). --wait SEC: first wait up to SEC seconds for a new bridge's address.
+        Exit 0 = something to watch, 1 = nothing (no uplink, no bridge: suricata not started),
+        2 = error (255 with --no-restart: suricata.service then fails, visibly).
+  harden-ids status
+        What Suricata watches now, its memory, the rules, the alerts of the last 24 hours
+        (signature, count, sources): no payload, no MAC address, no network name.
+
+Installed to /usr/local/sbin/harden-ids by harden-workstation.sh section ids (docs/ids.md).
+Called by: suricata.service (ExecCondition), the NetworkManager dispatcher 91-harden-ids,
+harden-ids-sync.service (udev: a libvirt bridge appears).
+"""
+import collections
+import datetime
+import grp
+import ipaddress
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+CONF_DIR = '/etc/suricata/harden-ids'
+NET_YAML = CONF_DIR + '/net.yaml'
+IDS_CONF = CONF_DIR + '/ids.conf'
+LOCAL_RULES = CONF_DIR + '/local.rules'
+HOSTFW_LOCAL = '/etc/hostfw/local.conf'
+RULES = '/var/lib/suricata/rules/suricata.rules'
+EVE = '/var/log/suricata/harden-ids/eve.json'
+UNIT = 'suricata.service'
+IP = '/usr/sbin/ip'
+SYSTEMCTL = '/usr/bin/systemctl'
+
+# a group nothing on a watched interface has: inside PRIVATE_NET (a rule may cut it out of
+# that group), reserved (never a host's address)
+UNSET = '169.254.0.0/32'
+PRIVATE_NET = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16',
+               '100.64.0.0/10']
+# never an uplink: loopback, tunnels, bridges, container / VM links
+NOT_UPLINK = ('lo', 'wg', 'tun', 'tap', 'virbr', 'vnet', 'veth', 'docker', 'podman', 'cni',
+              'br-')
+IFNAME_RE = re.compile(r'^[A-Za-z0-9_.-]{1,15}$')
+FIRST_CLUSTER_ID = 99
+
+PORT_GROUPS = [
+    ('HTTP_PORTS', '"80"'), ('SHELLCODE_PORTS', '"!80"'), ('ORACLE_PORTS', '1521'),
+    ('SSH_PORTS', '22'), ('DNP3_PORTS', '20000'), ('MODBUS_PORTS', '502'),
+    ('FILE_DATA_PORTS', '"[$HTTP_PORTS,110,143]"'), ('FTP_PORTS', '21'),
+    ('GENEVE_PORTS', '6081'), ('VXLAN_PORTS', '4789'), ('TEREDO_PORTS', '3544'),
+    ('SIP_PORTS', '"[5060,5061]"'),
+]
+# groups ET rules use besides HOME_NET / EXTERNAL_NET (Suricata's defaults)
+STD_GROUPS = [
+    ('HTTP_SERVERS', '$HOME_NET'), ('SMTP_SERVERS', '$HOME_NET'), ('SQL_SERVERS', '$HOME_NET'),
+    ('DNS_SERVERS', '$HOME_NET'), ('TELNET_SERVERS', '$HOME_NET'),
+    ('AIM_SERVERS', '$EXTERNAL_NET'), ('DC_SERVERS', '$HOME_NET'), ('DNP3_SERVER', '$HOME_NET'),
+    ('DNP3_CLIENT', '$HOME_NET'), ('MODBUS_CLIENT', '$HOME_NET'),
+    ('MODBUS_SERVER', '$HOME_NET'), ('ENIP_CLIENT', '$HOME_NET'), ('ENIP_SERVER', '$HOME_NET'),
+]
+
+
+class Error(Exception):
+    pass
+
+
+def say(msg):
+    print('harden-ids: ' + msg, flush=True)
+
+
+# ---------------------------------------------------------------- inputs
+
+def read_conf(path=IDS_CONF):
+    """ids.conf: "key = value" lines (written by the section from its decisions)"""
+    conf = {'vm_bridges': [], 'browse_net': ''}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.split('#', 1)[0].strip()
+                if '=' not in line:
+                    continue
+                k, v = (x.strip() for x in line.split('=', 1))
+                if k == 'vm_bridges':
+                    conf[k] = [b for b in v.split() if IFNAME_RE.match(b)]
+                elif k == 'browse_net' and v:
+                    conf[k] = str(ipaddress.ip_network(v, strict=True))
+    except FileNotFoundError:
+        pass
+    except ValueError as e:
+        raise Error('%s: %s' % (path, e))
+    return conf
+
+
+def read_vpn_api(path=HOSTFW_LOCAL):
+    """vpn_api4 addresses from hostfw's local.conf (the Mullvad API: TLS outside the tunnel)"""
+    out = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.split('#', 1)[0].split()
+                if len(line) >= 2 and line[0] == 'vpn_api4':
+                    for a in ' '.join(line[1:]).replace(',', ' ').split():
+                        out.append(str(ipaddress.IPv4Address(a)) + '/32')
+    except (FileNotFoundError, PermissionError):
+        pass
+    except ValueError:
+        say('WARNING: %s: invalid vpn_api4 address: VPN_API unset' % path)
+        return []
+    return sorted(set(out))
+
+
+def ip_json(*args, family=('-4',)):
+    r = subprocess.run([IP, '-j'] + list(family) + list(args), capture_output=True, text=True,
+                       timeout=10)
+    if r.returncode != 0:
+        raise Error('ip %s: %s' % (' '.join(args), r.stderr.strip()[:200]))
+    return json.loads(r.stdout or '[]')
+
+
+# ---------------------------------------------------------------- the network now
+
+def gather(routes, links, names, conf, vpn_api):
+    """routes: `ip -j -4 route show default`; links: `ip -j -4 addr show` (links with an IPv4
+    address); names: every link's name (`ip -j link show`). The state net.yaml is made from."""
+    bridges = conf['vm_bridges']
+    addrs = {n: [] for n in names if IFNAME_RE.match(n)}
+    for link in links:
+        name = link.get('ifname', '')
+        if not IFNAME_RE.match(name):
+            continue
+        addrs[name] = [(a['local'], int(a['prefixlen'])) for a in link.get('addr_info', [])
+                       if a.get('family') == 'inet' and a.get('scope', 'global') == 'global'
+                       and 'local' in a and 'prefixlen' in a]
+    uplinks, gateways = [], []
+    for r in routes:
+        dev, gw = r.get('dev', ''), r.get('gateway', '')
+        if r.get('dst') not in (None, 'default') or not IFNAME_RE.match(dev):
+            continue
+        if dev.startswith(NOT_UPLINK) or dev in bridges:
+            continue
+        if dev not in uplinks:
+            uplinks.append(dev)
+        if gw and gw + '/32' not in gateways:
+            ipaddress.IPv4Address(gw)
+            gateways.append(gw + '/32')
+    laptop, lan = [], []
+    for dev in uplinks:
+        for local, plen in addrs.get(dev, []):
+            iface = ipaddress.IPv4Interface('%s/%d' % (local, plen))
+            laptop.append('%s/32' % iface.ip)
+            if str(iface.network) not in lan:
+                lan.append(str(iface.network))
+    present = [b for b in bridges if b in addrs]
+    vm_net, vm_gw = [], []
+    if conf['browse_net']:
+        vm_net.append(conf['browse_net'])
+    for b in present:
+        for local, plen in addrs[b]:
+            iface = ipaddress.IPv4Interface('%s/%d' % (local, plen))
+            vm_gw.append('%s/32' % iface.ip)
+            if str(iface.network) not in vm_net:
+                vm_net.append(str(iface.network))
+    return {
+        'uplinks': uplinks, 'bridges': present, 'laptop': laptop, 'lan': lan,
+        'gateways': gateways, 'vm_net': vm_net, 'vm_gw': vm_gw,
+        'browse_net': [conf['browse_net']] if conf['browse_net'] else [],
+        'vpn_api': list(vpn_api),
+        'bridges_without_address': [b for b in present if not addrs[b]],
+    }
+
+
+def group(items):
+    return '"[%s]"' % ','.join(items or [UNSET])
+
+
+def render(state):
+    home = state['laptop'] + state['vm_net']
+    lines = [
+        '%YAML 1.1', '---',
+        '# /etc/suricata/harden-ids/net.yaml - written by harden-ids sync (harden-workstation.sh',
+        '# section ids) for the network this laptop is on now. Do not edit: the next network',
+        '# change rewrites it. Local addresses only; read by suricata.yaml (include).',
+        'vars:',
+        '  address-groups:',
+        '    HOME_NET: %s' % group(home),
+        '    EXTERNAL_NET: "!$HOME_NET"',
+        '    LAPTOP_LAN: %s' % group(state['laptop']),
+        '    LAN: %s' % group(state['lan']),
+        '    GATEWAY: %s' % group(state['gateways']),
+        '    VM_NET: %s' % group(state['vm_net']),
+        '    VM_GW: %s' % group(state['vm_gw']),
+        '    BROWSE_NET: %s' % group(state['browse_net']),
+        '    VPN_API: %s' % group(state['vpn_api']),
+        '    PRIVATE_NET: %s' % group(PRIVATE_NET),
+    ]
+    lines += ['    %s: "%s"' % (k, v) for k, v in STD_GROUPS]
+    lines += ['  port-groups:']
+    lines += ['    %s: %s' % (k, v) for k, v in PORT_GROUPS]
+    ifaces = state['uplinks'] + state['bridges']
+    if not ifaces:
+        lines += ['# nothing to watch now (no uplink, no VM bridge): suricata is not started',
+                  'af-packet: []']
+    else:
+        lines += ['af-packet:']
+        for i, name in enumerate(ifaces):
+            kind = 'uplink' if name in state['uplinks'] else 'VM bridge'
+            lines += [
+                '  # %s' % kind,
+                '  - interface: %s' % name,
+                '    threads: 1',
+                '    cluster-id: %d' % (FIRST_CLUSTER_ID - i),
+                '    cluster-type: cluster_flow',
+                '    defrag: yes',
+                '    tpacket-v3: yes',
+                '    ring-size: 2048',
+                '    # only what this host sends / receives (no promiscuous mode)',
+                '    disable-promisc: yes',
+            ]
+    return '\n'.join(lines) + '\n'
+
+
+def current(conf):
+    names = [x.get('ifname', '') for x in ip_json('link', 'show', family=())]
+    return gather(ip_json('route', 'show', 'default'), ip_json('addr', 'show'), names, conf,
+                  read_vpn_api())
+
+
+# ---------------------------------------------------------------- sync
+
+def write_if_changed(path, text):
+    try:
+        with open(path) as f:
+            if f.read() == text:
+                return False
+    except FileNotFoundError:
+        pass
+    try:
+        gid = grp.getgrnam('suricata').gr_gid
+    except KeyError:
+        gid = 0
+    tmp = '%s.tmp.%d' % (path, os.getpid())
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(text)
+        os.chown(tmp, 0, gid)
+        os.chmod(tmp, 0o640)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+    return True
+
+
+def systemctl(*args):
+    return subprocess.run([SYSTEMCTL] + list(args), capture_output=True, text=True,
+                          timeout=30)
+
+
+def describe(state):
+    for dev in state['uplinks']:
+        say('uplink %s: LAN %s, gateway %s' % (
+            dev, ' '.join(state['lan']) or '-', ' '.join(state['gateways']) or '-'))
+    if not state['uplinks']:
+        say('no uplink (offline)')
+    for b in state['bridges']:
+        say('VM bridge %s' % b)
+    if state['bridges_without_address']:
+        say('no address yet: %s (VM_GW without it)' % ' '.join(state['bridges_without_address']))
+
+
+def cmd_sync(argv):
+    restart = '--no-restart' not in argv
+    wait = 0
+    if '--wait' in argv:
+        i = argv.index('--wait')
+        try:
+            wait = max(0, min(60, int(argv[i + 1])))
+        except (IndexError, ValueError):
+            raise Error('--wait needs seconds (0-60)')
+    conf = read_conf()
+    state = current(conf)
+    end = time.monotonic() + wait
+    while state['bridges_without_address'] and time.monotonic() < end:
+        time.sleep(1)
+        state = current(conf)
+    changed = write_if_changed(NET_YAML, render(state))
+    describe(state)
+    watch = state['uplinks'] + state['bridges']
+    say('%s %s' % (NET_YAML, 'written' if changed else 'unchanged'))
+    if not watch:
+        say('nothing to watch: suricata not started')
+    if restart:
+        enabled = systemctl('is-enabled', '--quiet', UNIT).returncode == 0
+        active = systemctl('is-active', '--quiet', UNIT).returncode == 0
+        if not enabled:
+            say('%s not enabled: no restart' % UNIT)
+        elif changed and active:
+            systemctl('restart', '--no-block', UNIT)
+            say('%s restarted (network changed)' % UNIT)
+        elif not active and watch:
+            systemctl('start', '--no-block', UNIT)
+            say('%s started' % UNIT)
+        elif changed and not watch:
+            systemctl('stop', '--no-block', UNIT)
+            say('%s stopped' % UNIT)
+    return 0 if watch else 1
+
+
+# ---------------------------------------------------------------- status
+
+def count_rules(path):
+    n = 0
+    try:
+        with open(path, errors='replace') as f:
+            for line in f:
+                if re.match(r'^\s*(alert|drop|pass|reject|rejectsrc|rejectdst|rejectboth)\s', line):
+                    n += 1
+    except (FileNotFoundError, PermissionError):
+        return None
+    return n
+
+
+def packet_sockets(uid):
+    """af-packet sockets of a user per interface index (/proc/net/packet)"""
+    names = {}
+    for name in os.listdir('/sys/class/net'):
+        try:
+            with open('/sys/class/net/%s/ifindex' % name) as f:
+                names[int(f.read())] = name
+        except (OSError, ValueError):
+            pass
+    out = collections.Counter()
+    with open('/proc/net/packet') as f:
+        next(f, None)
+        for line in f:
+            p = line.split()
+            if len(p) >= 8 and p[7] == str(uid):
+                out[names.get(int(p[4]), 'index ' + p[4])] += 1
+    return out
+
+
+def proc_mem(pid):
+    out = {}
+    try:
+        with open('/proc/%d/status' % pid) as f:
+            for line in f:
+                k, _, v = line.partition(':')
+                if k in ('VmRSS', 'VmHWM'):
+                    out[k] = int(v.split()[0]) // 1024
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def eve_summary(path, hours=24):
+    since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=hours)
+    sigs, kinds = {}, collections.Counter()
+    try:
+        f = open(path, errors='replace')
+    except (FileNotFoundError, PermissionError) as e:
+        return None, None, str(e)
+    with f:
+        for line in f:
+            try:
+                ev = json.loads(line)
+                ts = datetime.datetime.strptime(ev['timestamp'][:19], '%Y-%m-%dT%H:%M:%S')
+                tz = ev['timestamp'][26:]
+                if tz:
+                    ts = ts.replace(tzinfo=datetime.timezone(datetime.timedelta(
+                        hours=int(tz[:3]), minutes=int(tz[0] + tz[3:5]))))
+                else:
+                    ts = ts.replace(tzinfo=datetime.timezone.utc)
+            except (ValueError, KeyError, IndexError, TypeError):
+                continue
+            if ts < since:
+                continue
+            kind = ev.get('event_type', '?')
+            kinds[kind] += 1
+            if kind != 'alert':
+                continue
+            a = ev.get('alert', {})
+            key = (a.get('severity', 3), a.get('signature_id', 0))
+            s = sigs.setdefault(key, {'msg': a.get('signature', '?'), 'n': 0, 'src': set()})
+            s['n'] += 1
+            s['src'].add(ev.get('src_ip', '?'))
+    return sigs, kinds, None
+
+
+def cmd_status(_argv):
+    act = systemctl('is-active', UNIT).stdout.strip() or '?'
+    ena = systemctl('is-enabled', UNIT).stdout.strip() or '?'
+    print('%s: %s, %s' % (UNIT, act, ena))
+    pid = systemctl('show', '-p', 'MainPID', '--value', UNIT).stdout.strip()
+    if pid.isdigit() and int(pid) > 0:
+        m = proc_mem(int(pid))
+        print('memory: %s MiB now, %s MiB peak (RSS)' % (m.get('VmRSS', '?'), m.get('VmHWM', '?')))
+    try:
+        state = current(read_conf())
+        with open(NET_YAML) as f:
+            same = f.read() == render(state)
+    except (OSError, Error) as e:
+        print('net.yaml: %s' % e)
+        state, same = None, False
+    if state:
+        for dev in state['uplinks']:
+            print('watch: %s (uplink) LAN %s, laptop %s, gateway %s' % (
+                dev, ' '.join(state['lan']) or '-', ' '.join(state['laptop']) or '-',
+                ' '.join(state['gateways']) or '-'))
+        for b in state['bridges']:
+            print('watch: %s (VM bridge)' % b)
+        print('VM_NET %s, VPN_API %s' % (' '.join(state['vm_net']) or '-',
+                                         'set' if state['vpn_api'] else 'unset'))
+        print('net.yaml: %s' % ('up to date' if same else 'OUT OF DATE (harden-ids sync)'))
+    try:
+        uid = int(subprocess.run(['/usr/bin/id', '-u', 'suricata'], capture_output=True,
+                                 text=True, timeout=5).stdout)
+        socks = packet_sockets(uid)
+        print('capture sockets (user suricata): %s' % (
+            ', '.join('%s %d' % kv for kv in sorted(socks.items())) or 'none'))
+    except (ValueError, OSError):
+        print('capture sockets: unknown')
+    n_et, n_local = count_rules(RULES), count_rules(LOCAL_RULES)
+    if n_et is None:
+        print('ET Open: none yet (%s missing)' % RULES)
+    else:
+        t = datetime.datetime.fromtimestamp(os.stat(RULES).st_mtime).strftime('%Y-%m-%d %H:%M')
+        print('ET Open: %d rules active (%s)' % (n_et, t))
+    print('local rules: %s active' % ('?' if n_local is None else n_local))
+    upd = systemctl('show', '-p', 'Result', '-p', 'ExecMainExitTimestamp',
+                    'harden-ids-update.service').stdout.split()
+    print('last rules update run: %s' % (' '.join(upd) or '?'))
+    sigs, kinds, err = eve_summary(EVE)
+    if err:
+        print('eve.json: %s' % err)
+        return 0
+    size = os.stat(EVE).st_size // 1024
+    print('eve.json: %d KiB; last 24 h: %s' % (size, ', '.join(
+        '%s %d' % kv for kv in sorted(kinds.items())) or 'nothing'))
+    for (sev, sid), s in sorted(sigs.items(), key=lambda kv: (kv[0][0], -kv[1]['n']))[:15]:
+        src = sorted(s['src'])
+        print('  sev %s  %5d x  sid %-8s %s  (from %s%s)' % (
+            sev, s['n'], sid, s['msg'][:70], ', '.join(src[:3]),
+            ' +%d' % (len(src) - 3) if len(src) > 3 else ''))
+    return 0
+
+
+def main(argv):
+    cmds = {'sync': cmd_sync, 'status': cmd_status}
+    if len(argv) < 2 or argv[1] not in cmds:
+        print(__doc__.strip())
+        return 2
+    try:
+        return cmds[argv[1]](argv[2:])
+    except (Error, OSError, subprocess.SubprocessError, ValueError) as e:
+        say('ERROR: %s' % e)
+        # ExecCondition: 1-254 = skip quietly, 255 = the unit fails (an error must show)
+        return 255 if '--no-restart' in argv else 2
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

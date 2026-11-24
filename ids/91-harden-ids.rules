@@ -1,0 +1,3 @@
+# /etc/udev/rules.d/91-harden-ids.rules - harden-workstation.sh section ids
+# A libvirt bridge appears (its network starts): Suricata watches it too.
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="virbr*", TAG+="systemd", ENV{SYSTEMD_WANTS}+="harden-ids-sync.service"

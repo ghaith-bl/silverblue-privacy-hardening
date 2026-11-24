@@ -1,0 +1,117 @@
+%YAML 1.1
+---
+# /etc/suricata/harden-ids/suricata.yaml - harden-workstation.sh section ids (docs/ids.md)
+#
+# Suricata 8 as a network IDS on this laptop: it watches, it never drops (no IPS, no NFQUEUE).
+# Interfaces: the uplink (Wi-Fi / cable) and the libvirt bridges, never the tunnel (privacy).
+# Logs: alerts, app-layer anomalies and DHCP only (eve.json): no DNS / HTTP / TLS / flow logs,
+# no payload or packet in an alert, nothing of what this laptop or its VMs browse.
+# Not set here = Suricata's built-in default (memcaps, flow, stream, app-layer parsers on).
+#
+# net.yaml (same folder) holds what depends on the network: address / port groups and the
+# af-packet interfaces. Written by `harden-ids sync` at every start of suricata.service and on
+# every network change (NetworkManager dispatcher, new VM bridge).
+suricata-version: "8.0"
+
+include: net.yaml
+
+default-log-dir: /var/log/suricata/harden-ids/
+
+# no stats.log, no stats records in eve.json
+stats:
+  enabled: no
+
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: eve.json
+      community-id: no
+      types:
+        - alert:
+            payload: no
+            payload-printable: no
+            packet: no
+            http-body: no
+            http-body-printable: no
+            websocket-payload: no
+            websocket-payload-printable: no
+            tagged-packets: no
+            verdict: no
+            metadata:
+              # no decoded app layer (no hostnames, URLs, queries) in an alert
+              app-layer: false
+              # packet / byte counts of the flow
+              flow: true
+              rule:
+                # the rule's metadata (ET: signature_severity, attack_target ...)
+                metadata: true
+                raw: false
+                reference: false
+        - anomaly:
+            enabled: yes
+            types:
+              decode: no
+              stream: no
+              applayer: yes
+        - dhcp:
+            enabled: yes
+            # off: only what maps a MAC address to an IP address (server, lease)
+            extended: no
+
+# Suricata's own messages: console = the journal (journalctl -u suricata)
+logging:
+  default-log-level: notice
+  outputs:
+    - console:
+        enabled: yes
+    - file:
+        enabled: no
+    - syslog:
+        enabled: no
+
+security:
+  # no process creation after start
+  limit-noproc: true
+  landlock:
+    enabled: no
+  lua:
+    # no Lua in rules (none of the rules used here needs it)
+    allow-rules: false
+
+# no core dumps (they would hold packet memory)
+coredump:
+  max-dump: 0
+
+host-mode: sniffer-only
+runmode: workers
+
+# rule reload: SIGUSR2 (systemctl reload suricata); no command socket
+unix-command:
+  enabled: no
+
+detect:
+  profile: low
+  sgh-mpm-context: auto
+  # compiled pattern databases cached on disk: faster restarts on a network change
+  sgh-mpm-caching: yes
+  sgh-mpm-caching-path: /var/lib/suricata/cache/sgh
+  prefilter:
+    default: mpm
+
+mpm-algo: auto
+spm-algo: auto
+
+threading:
+  set-cpu-affinity: no
+
+# ET Open (suricata-update, harden-ids-update.timer) + this machine's rules
+default-rule-path: /var/lib/suricata/rules
+rule-files:
+  - suricata.rules
+  - /etc/suricata/harden-ids/local.rules
+
+# classification.config: suricata-update merges Suricata's own with the ruleset's here
+classification-file: /var/lib/suricata/rules/classification.config
+# a copy of Fedora's /etc/suricata/reference.config, readable by user suricata
+reference-config-file: /etc/suricata/harden-ids/reference.config

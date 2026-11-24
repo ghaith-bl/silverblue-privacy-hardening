@@ -102,6 +102,13 @@ FIRMWARE_METADATA_CALENDAR="*-*-1/2"  # systemd OnCalendar of that timer: every 
                              # off: at boot)
 FIRMWARE_REPORTS="no"        # autoupdate section: "no" = fwupd sends no reports to LVFS (no report
                              # address in /etc/fwupd/remotes.d, nothing automatic); other = leave
+IDS="on"                     # ids section: Suricata network IDS (watches, never drops) on the uplink
+                             # and the VM bridges, never the tunnel (docs/ids.md); needs suricata
+                             # layered (rpm-ostree install suricata nmap, reboot); "off" = suricata
+                             # and the rules timer stopped + disabled (files stay)
+IDS_RULES_UPDATE="weekly"    # ids section: ET Open (selected categories) weekly via suricata-update,
+                             # through the tunnel, as user suricata; "no" = local rules only, no
+                             # download
 APP_UNITS=(brave-browser)    # appunit section: desktop ids started as their own service (launcher
                              # forks before GNOME moves it: Chromium family); () = none
 ADMIN_USER="${ADMIN_USER:-}" # accounts section: CLI-only admin (wheel, text console, hidden
@@ -119,7 +126,7 @@ fi
 
 # created by the first backup of a run only: a run that replaces nothing leaves no folder
 BACKUP_ROOT="/var/backups/hardening/$(date +%Y%m%d-%H%M%S)"
-SECTIONS=(sysctl modules coredump journald gnome sudo pam pwage su accounts services guesttools loopback cron sshd auditd audit-rules perms mic netprivacy mullvad kvmlan browsevm svirt usbguard appunit time autoupdate kargs homelock integrity)
+SECTIONS=(sysctl modules coredump journald gnome sudo pam pwage su accounts services guesttools loopback cron sshd auditd audit-rules perms mic netprivacy mullvad kvmlan browsevm svirt usbguard appunit time autoupdate kargs homelock ids integrity)
 CUR_SECTION=""      # the section running now (error report, change list)
 CHANGE_LOG=""       # file: one line "<section> TAB <what>" per change (pipelines run
                     # functions in a subshell: a variable would lose their changes)
@@ -2577,6 +2584,186 @@ sec_integrity() {
   fi
 }
 
+# ids_dir <path> <owner:group> <mode>: folder made or set to owner / mode (a change only then)
+ids_dir() {
+  if [[ ! -d $1 ]]; then
+    install -d -m "$3" -o "${2%%:*}" -g "${2##*:}" "$1"; changed "$1 ($3 $2)"
+  else
+    set_owner_mode "$2" "$3" "$1"
+  fi
+}
+
+# ids_file <src> <dst> <owner:group> <mode>: write_file, then owner (root:suricata = suricata
+# reads, cannot change)
+ids_file() {
+  write_file "$2" "$4" < "$1"
+  set_owner_mode "$3" "$4" "$2"
+}
+
+# ids_update_live: start harden-ids-update.service (oneshot: systemctl start waits for its
+# end), its journal lines shown while it runs; returns the start's exit code
+ids_update_live() {
+  local t0 seen=0 n pid rc=0
+  t0=$(date +%s)
+  systemctl start harden-ids-update.service & pid=$!
+  while :; do
+    n=$(journalctl -q -u harden-ids-update.service --since "@$t0" -o cat --no-pager 2>/dev/null | wc -l)
+    if (( n > seen )); then
+      journalctl -q -u harden-ids-update.service --since "@$t0" -o cat --no-pager 2>/dev/null |
+        tail -n +"$((seen + 1))" | cut -c1-160 | sed 's/^/      /'
+      seen=$n
+    fi
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 3
+  done
+  wait "$pid" || rc=$?
+  return "$rc"
+}
+
+sec_ids() {
+  # c0 / c1: change count before / after what needs a restart of a running suricata
+  local src dst=/etc/suricata/harden-ids tool=/usr/local/sbin/harden-ids f c0 c1 rc t0 tmp
+  local sd=/etc/systemd/system dropin=/etc/systemd/system/suricata.service.d/harden-ids.conf
+  local disp=/etc/NetworkManager/dispatcher.d/91-harden-ids udev=/etc/udev/rules.d/91-harden-ids.rules
+  local rules=/var/lib/suricata/rules logdir=/var/log/suricata/harden-ids
+  src="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/ids"
+  if [[ $IDS != on ]]; then
+    for f in harden-ids-update.timer suricata.service; do
+      if unit_exists "$f" && [[ $(unit_state "$f") == enabled || $(systemctl is-active "$f" 2>/dev/null) == active ]]; then
+        systemctl disable --now "$f" >/dev/null 2>&1 || warn "disable $f failed"
+        changed "disabled $f"
+      fi
+    done
+    log "IDS=$IDS: suricata and the rules timer off (files kept)"
+    return 0
+  fi
+  if ! rpm -q suricata >/dev/null 2>&1; then
+    warn "suricata not installed: rpm-ostree install suricata nmap, reboot, run this section again"
+    return 0
+  fi
+  getent passwd suricata >/dev/null || die "no user suricata (made at boot by the package's sysusers file: reboot first)"
+  for f in suricata.yaml local.rules update.yaml disable.conf harden-ids suricata-harden-ids.conf \
+           harden-ids-update.service harden-ids-update.timer harden-ids-sync.service 91-harden-ids \
+           91-harden-ids.rules harden-ids.logrotate; do
+    [[ -f $src/$f ]] || die "$src/$f missing (run from the repo)"
+  done
+
+  # config: root writes, user suricata reads (suricata-update and suricata -T run as suricata)
+  c0=$(section_changes)
+  ids_dir "$dst" root:suricata 0750
+  for f in suricata.yaml local.rules update.yaml disable.conf; do
+    ids_file "$src/$f" "$dst/$f" root:suricata 0640
+  done
+  tmp=$(mktemp)
+  printf '%s\n' "# written by harden-workstation.sh section ids (MULLVAD_VM_BRIDGES, BROWSEVM_*): read by harden-ids" \
+    "vm_bridges = ${MULLVAD_VM_BRIDGES[*]}" \
+    "browse_net = ${BROWSEVM_BRIDGE:+$BROWSEVM_NET.0/24}" > "$tmp"
+  ids_file "$tmp" "$dst/ids.conf" root:suricata 0640
+  rm -f "$tmp"
+  # Fedora's reference.config, readable by user suricata (rules with reference: need it)
+  [[ -r /etc/suricata/reference.config ]] || die "/etc/suricata/reference.config missing (suricata package?)"
+  ids_file /etc/suricata/reference.config "$dst/reference.config" root:suricata 0640
+  c1=$(section_changes)
+
+  # state and logs: user suricata writes (rules, cache, eve.json)
+  ids_dir "$logdir" suricata:suricata 0750
+  for f in "$rules" /var/lib/suricata/update /var/lib/suricata/cache /var/lib/suricata/cache/sgh; do
+    ids_dir "$f" suricata:suricata 0750
+  done
+  # classification.config: suricata-update writes the merged one; until then Fedora's
+  # (suricata -T refuses a missing one)
+  if [[ ! -e $rules/classification.config ]]; then
+    for f in /etc/suricata/classification.config /usr/share/suricata/classification.config ""; do
+      [[ -z $f || -r $f ]] && break
+    done
+    [[ -n $f ]] || die "no classification.config in /etc/suricata or /usr/share/suricata (suricata package?)"
+    install -m 0640 -o suricata -g suricata "$f" "$rules/classification.config"
+    changed "$rules/classification.config (Fedora's, until the first ET download)"
+  fi
+  for f in "$dst/local.rules" "$dst/suricata.yaml" "$rules/classification.config"; do
+    runuser -u suricata -- test -r "$f" || die "user suricata cannot read $f (a parent folder's mode?)"
+  done
+  runuser -u suricata -- test -w "$logdir" || die "user suricata cannot write $logdir (mode of /var/log/suricata?)"
+
+  # tool, units, hooks
+  write_file "$tool" 0755 < "$src/harden-ids"
+  f=$(section_changes)
+  write_file "$dropin" 0644 < "$src/suricata-harden-ids.conf"
+  (( $(section_changes) == f )) || c1=$((c1 + 1))   # a new drop-in: restart too
+  write_file "$sd/harden-ids-update.service" 0644 < "$src/harden-ids-update.service"
+  write_file "$sd/harden-ids-update.timer" 0644 < "$src/harden-ids-update.timer"
+  write_file "$sd/harden-ids-sync.service" 0644 < "$src/harden-ids-sync.service"
+  (( $(section_changes) == f )) || systemctl daemon-reload
+  write_file "$disp" 0755 < "$src/91-harden-ids"
+  f=$(section_changes)
+  write_file "$udev" 0644 < "$src/91-harden-ids.rules"
+  (( $(section_changes) == f )) || udevadm control --reload || true
+  write_file /etc/logrotate.d/harden-ids 0644 < "$src/harden-ids.logrotate"
+
+  # the network part (net.yaml) for this network; then the local rules through suricata -T
+  f=$(cat "$dst/net.yaml" 2>/dev/null || true)
+  rc=0; "$tool" sync --no-restart || rc=$?
+  (( rc <= 1 )) || die "harden-ids sync failed (exit $rc)"
+  # a new network part needs a restart too (not a change of this machine's config)
+  [[ $f == "$(cat "$dst/net.yaml")" ]] || c1=$((c1 + 1))
+  tmp=$(mktemp -d)
+  if suricata -T -c "$dst/suricata.yaml" -S "$dst/local.rules" -l "$tmp" \
+       --set detect.sgh-mpm-caching=no > "$tmp/out" 2>&1; then
+    log "suricata -T: config + local.rules ok"
+    rm -rf "$tmp"
+  else
+    grep -iE 'error|warn' "$tmp/out" | head -n 15 >&2 || tail -n 15 "$tmp/out" >&2
+    rm -rf "$tmp"
+    die "suricata -T refuses $dst/suricata.yaml or local.rules (lines above)"
+  fi
+
+  # ET Open: weekly timer; the first download now (live lines)
+  if [[ $IDS_RULES_UPDATE == weekly ]]; then
+    enable_unit harden-ids-update.timer now || warn "enable harden-ids-update.timer failed"
+    if [[ ! -s $rules/suricata.rules ]]; then
+      log "first ET Open download + suricata -T (as user suricata, through the tunnel, a few minutes) ..."
+      if ids_update_live; then
+        changed "$rules/suricata.rules (first ET Open download)"
+      else
+        warn "harden-ids-update.service failed: local rules only for now (journalctl -u harden-ids-update.service)"
+      fi
+    fi
+  elif unit_exists harden-ids-update.timer && [[ $(unit_state harden-ids-update.timer) == enabled ]]; then
+    systemctl disable --now harden-ids-update.timer >/dev/null 2>&1 || warn "disable harden-ids-update.timer failed"
+    changed "disabled harden-ids-update.timer (IDS_RULES_UPDATE=$IDS_RULES_UPDATE)"
+  fi
+
+  # suricata: enabled, (re)started when its config or the network part changed
+  enable_unit suricata.service || die "enable suricata.service failed"
+  t0=$(date +%s)
+  if systemctl is-active -q suricata.service; then
+    if (( c1 > c0 )); then
+      systemctl restart suricata.service; log "suricata restarted (config changed)"
+    else
+      t0=""
+    fi
+  else
+    systemctl start suricata.service || warn "start suricata.service failed: journalctl -u suricata"
+    changed "started suricata.service"
+  fi
+  # the rules compile before the capture starts (up to a minute or two with ET Open)
+  if [[ -n $t0 ]]; then
+    log "waiting for suricata's engine (up to 3 minutes) ..."
+    for f in $(seq 1 36); do
+      systemctl is-active -q suricata.service || break
+      if journalctl -q -u suricata.service --since "@$t0" -o cat --no-pager 2>/dev/null |
+           grep 'Engine started' >/dev/null; then
+        log "suricata: engine started ($(( $(date +%s) - t0 )) s)"; break
+      fi
+      sleep 5
+    done
+  fi
+  if ! systemctl is-active -q suricata.service; then
+    warn "suricata.service not running (nothing to watch, or failed): journalctl -u suricata.service -b | tail -30"
+  fi
+  "$tool" status | sed 's/^/      /' || true
+}
+
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
@@ -2699,6 +2886,7 @@ run_sections() {
       kargs)       sec_kargs ;;
       homelock)    sec_homelock ;;
       integrity)   sec_integrity ;;
+      ids)         sec_ids ;;
       *)           warn "unknown section: $s" ;;
     esac
     n=$(section_changes)

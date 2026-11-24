@@ -1,0 +1,10 @@
+# /etc/systemd/system/harden-ids-sync.service - harden-workstation.sh section ids
+# Started by udev (91-harden-ids.rules) when a libvirt bridge appears: Suricata watches it
+# too (net.yaml rewritten, suricata restarted). Waits up to 10 s for the bridge's address.
+[Unit]
+Description=Suricata follows the network (harden-ids sync)
+ConditionPathExists=/etc/suricata/harden-ids/suricata.yaml
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/harden-ids sync --wait 10

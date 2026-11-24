@@ -1,0 +1,18 @@
+#!/bin/sh
+# NetworkManager dispatcher: Suricata follows the uplink (harden-workstation.sh section ids)
+# net.yaml rewritten for the new network, suricata restarted when it changed.
+# installed to /etc/NetworkManager/dispatcher.d/ by the section
+
+case "$1" in
+    lo|wg*|virbr*|vnet*|veth*|tun*|tap*) exit 0 ;;
+esac
+case "$2" in
+    up|down|dhcp4-change|reapply) ;;
+    *) exit 0 ;;
+esac
+
+[ -x /usr/local/sbin/harden-ids ] || exit 0
+[ -f /etc/suricata/harden-ids/suricata.yaml ] || exit 0
+
+/usr/local/sbin/harden-ids sync 2>&1 | logger -t harden-ids-dispatcher -p daemon.info
+exit 0

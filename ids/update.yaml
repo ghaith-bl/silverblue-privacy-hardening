@@ -1,0 +1,20 @@
+# /etc/suricata/harden-ids/update.yaml - suricata-update, harden-workstation.sh section ids
+# Run by harden-ids-update.service (weekly timer, as user suricata, through the tunnel).
+# Result: /var/lib/suricata/rules/suricata.rules + classification.config, tested with
+# suricata -T before they replace the old ones (a failed test keeps the old rules).
+suricata-conf: /etc/suricata/harden-ids/suricata.yaml
+data-directory: /var/lib/suricata
+disable-conf: /etc/suricata/harden-ids/disable.conf
+# no enable / drop / modify lists (else a /etc/suricata/*.conf found there would be used)
+enable-conf: /dev/null
+drop-conf: /dev/null
+modify-conf: /dev/null
+ignore:
+  - "*deleted.rules"
+# ET Open only, by its URL (no source index download from the OISF)
+sources:
+  - https://rules.emergingthreats.net/open/suricata-%(__version__)s/emerging.rules.tar.gz
+local: []
+# a plain User-Agent: suricata-update's own sends OS, CPU, Python, distribution and Suricata
+# versions ("" would send none; some download servers refuse that)
+user-agent: "Suricata-Update"

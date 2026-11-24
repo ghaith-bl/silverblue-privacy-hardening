@@ -15,3 +15,8 @@ uuid  docs/browsevm.md  \{?d19a89b9-76c1-4a61-bcd4-49e8de916403\}?
 # host addresses of libvirt's default network and of the browse network (BROWSEVM_NET):
 # defaults of libvirt / this repo, the same on every machine that uses them
 ipv4  *  192\.168\.12[23]\.1
+
+# section ids: 169.254.0.0/32 = "no such group" in Suricata's address groups (reserved, never a
+# host); made-up hosts inside libvirt's default network / browsevm's network in the ids tests
+ipv4  *  169\.254\.0\.0
+ipv4  tests/*ids*  192\.168\.12[23]\.\d{1,3}

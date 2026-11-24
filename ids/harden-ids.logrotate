@@ -1,0 +1,16 @@
+# /etc/logrotate.d/harden-ids - harden-workstation.sh section ids
+# Suricata's eve.json (alerts, anomalies, DHCP): one file a day, 7 days kept, then deleted.
+# Suricata reopens its log files on SIGHUP.
+/var/log/suricata/harden-ids/eve.json {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 suricata suricata
+    sharedscripts
+    postrotate
+        /usr/bin/systemctl kill --signal=HUP --kill-whom=main suricata.service >/dev/null 2>&1 || true
+    endscript
+}
