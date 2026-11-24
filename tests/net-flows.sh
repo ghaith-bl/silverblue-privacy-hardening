@@ -30,7 +30,7 @@
 #   VM -> VPN  tcp all, udp top 100 + listeners         none open
 #   VM -> GW   tcp 53 80 443, ping                      not reached (filtered), fwd_vm_lan grows
 #   VM v6      ping ff02::1 on its link                 only the VM answers (no laptop v6 there)
-#   VM -> laptop link-local v6 (bridge, vnet*)          nothing open or closed (no v6 path)
+#   VM -> laptop link-local v6 (bridge, vnet*)          unreachable, or nothing open / closed
 #   VM -> internet via the tunnel                       connected to Mullvad, fwd_vm_new grows
 #   counters out_leak out_lan out_dns out_split in_lan in_vpn fwd_in   unchanged
 #   hostfw mode                                         enforce
@@ -143,9 +143,15 @@ ports_of() {
 
 scan_done() { head -c "$MAX_FILE" "$1" 2>/dev/null | grep -qE '^# Nmap done at .* -- 1 IP address \(1 host up\)'; }
 
-# check_scan <file stem> <label> <bad state regex> <must be open, space list> <may be open>
+scan_down() { head -c "$MAX_FILE" "$1" 2>/dev/null | grep -qE '^# Nmap done at .* -- 1 IP address \(0 hosts up\)'; }
+
+# check_scan <file stem> <label> <bad state regex> <must be open, space list> <may be open> [down-ok]
+# down-ok: "0 hosts up" counts as PASS (IPv6 on the same link: no neighbour answer = no path)
 check_scan() {
   local f=$W/$1.gnmap label=$2 bad=$3 must=" $4 " may=" $5 " p st hit="" miss="" other note
+  if [[ ${6:-} == down-ok && -f $f ]] && scan_down "$f"; then
+    pass "$label" "unreachable: no neighbour answer, so no port either"; return
+  fi
   if [[ ! -f $f ]] || ! scan_done "$f"; then fail "$label" "scan missing or not finished ($1.gnmap)"; return; fi
   while read -r p st; do
     [[ -n $p ]] || continue
@@ -232,7 +238,7 @@ evaluate() {
   i=0
   for a in $h6; do
     i=$((i + 1))
-    check_scan "tcp6-$i" "laptop v6 #$i" '^(open|closed)$' "" ""
+    check_scan "tcp6-$i" "laptop v6 #$i" '^(open|closed)$' "" "" down-ok
   done
   (( i > 0 )) || pass "laptop v6 targets" "the laptop has no link-local address on $BR_IF or its ports"
 

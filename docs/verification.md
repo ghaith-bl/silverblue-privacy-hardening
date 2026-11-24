@@ -37,7 +37,7 @@ is locked, so `NET_FLOWS_DIR=~/admin-inbox/net-flows` there (default `~/net-flow
 | stateful filter | ACK scan top 1000 | no port `unfiltered` but `53/tcp` (conntrack picks up a lone ACK as new: `nf_conntrack_tcp_loose=1`) |
 | laptop on the uplink / tunnel address | same scans | nothing open (dnsmasq binds `192.168.122.1` only; Mullvad's UDP socket unreachable) |
 | LAN gateway | tcp 53 80 443 + ping from the VM | `filtered`, no answer; `fwd_vm_lan` grows |
-| IPv6 | VM pings `ff02::1`; scans the laptop's link-local on `virbr0` / `vnet*` | only the VM answers; nothing open or closed |
+| IPv6 | VM pings `ff02::1`; scans the laptop's link-local on `virbr0` / `vnet*` | only the VM answers; laptop link-local unreachable (no neighbour answer) or nothing open / closed |
 | VM via the tunnel | `curl https://am.i.mullvad.net/connected` in the VM | connected; `fwd_vm_new` grows |
 | counters | `out_leak out_lan out_dns out_split in_lan in_vpn fwd_in` | unchanged during the run |
 | hostfw mode | `sudo hostfw status` | `enforce` |

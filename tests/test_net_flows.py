@@ -144,6 +144,20 @@ class NetFlowsEvaluate(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertTrue(any("hostfw mode" in ln for ln in self.lines(out, "FAIL")), out)
 
+    def test_v6_target_unreachable_passes(self):
+        # first host run: neighbour discovery for the laptop's vnet0 address got no answer
+        self.files["tcp6-1.gnmap"] = gnmap(f"{H6}%enp1s0", done=False) + \
+            "# Nmap done at Tue Nov 24 15:45:33 2026 -- 1 IP address (0 hosts up) scanned in 1.43 seconds\n"
+        rc, out = self.run_eval()
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(any("laptop v6 #1" in ln and "unreachable" in ln for ln in self.lines(out, "PASS")), out)
+
+    def test_v4_target_down_fails(self):
+        # a v4 target that is "down" means the scan saw nothing at all: not a pass
+        self.files["tcp-br.gnmap"] = "# Nmap done at x -- 1 IP address (0 hosts up) scanned in 1 seconds\n"
+        rc, out = self.run_eval()
+        self.assertEqual(rc, 1)
+
     def test_vm_sudo_refused_one_line(self):
         # sudo in the VM refused: no scan ran -> a short report naming the cause
         self.files = {k: v for k, v in self.files.items() if not k.endswith(".gnmap") and k != "remote.done"}
