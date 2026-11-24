@@ -11,13 +11,15 @@
 #   tests/net-flows.sh --no-internet       skip the "VM via the tunnel" check (am.i.mullvad.net)
 #   tests/net-flows.sh --evaluate DIR      check saved results again, no scan
 #   VM_HOST=vmub VM_USER=null              ssh alias of the lab VM, local user that holds its key
+#   NET_FLOWS_DIR=<dir>                    where results go (default ~/net-flows)
 #
 # Run as the admin (sudo for nft / ss / the VM user's ssh), on the text console: the VM's
 # sudo asks its password once (nmap needs raw sockets there). As VM_USER itself it runs too,
 # without the counter / listener parts (no sudo): those checks say SKIP.
 # Needs in the VM: nmap (sudo apt install nmap), curl for the tunnel check.
 # Changes nothing on this laptop. In the VM: one temp dir, removed at the end.
-# Results: ~/net-flows/<date-time>/ (0700): meta, nmap -oG files, counters, report.txt.
+# Results: $NET_FLOWS_DIR/<date-time>/ (0700; default ~/net-flows; the admin's home is locked:
+# NET_FLOWS_DIR=~/admin-inbox/net-flows): meta, nmap -oG files, counters, report.txt.
 #
 # Flow table (src = lab VM on virbr0; BR = laptop on virbr0, UP = laptop on the uplink,
 # VPN = laptop on the tunnel, GW = LAN gateway):
@@ -268,7 +270,7 @@ while (( $# )); do
     --quick)       QUICK=1 ;;
     --no-internet) INET=0 ;;
     --evaluate)    shift; [[ -n ${1:-} && -d $1 ]] || die "--evaluate needs a results dir"; W=$(cd "$1" && pwd) ;;
-    -h|--help)     sed -n '3,46p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)     sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)             die "unknown option: $1 (--help)" ;;
   esac
   shift
@@ -289,9 +291,15 @@ ROOT=1
 if [[ $ME == "$VM_USER" ]]; then ROOT=0; fi
 as_vm() { if [[ $ME == "$VM_USER" ]]; then "$@"; else sudo -u "$VM_USER" -H -- "$@"; fi; }
 
-W=$HOME/net-flows/$(date +%Y%m%d-%H%M%S)
-mkdir -p "$W" || die "cannot create $W"
-chmod 700 "$HOME/net-flows" "$W"
+# the admin's home is locked (immutable): only folders already inside are writable
+RES=${NET_FLOWS_DIR:-$HOME/net-flows}
+[[ $RES == /* && $RES != *..* ]] || die "NET_FLOWS_DIR: absolute path without '..'"
+mkdir -p "$RES" 2>/dev/null ||
+  die "cannot create $RES (locked home?): NET_FLOWS_DIR=<writable dir> $0 ..., e.g. ~/admin-inbox/net-flows"
+[[ -O $RES && ! -L $RES ]] || die "$RES: not my own directory, or a link"
+chmod 700 "$RES" || die "chmod $RES"
+W=$RES/$(date +%Y%m%d-%H%M%S)
+mkdir "$W" || die "cannot create $W"
 exec > >(tee "$W/run.txt" | mask6) 2>&1
 printf '== net-flows  %s  (%s)\n' "$(date -Is)" "$([[ $QUICK == 1 ]] && echo quick || echo full)"
 

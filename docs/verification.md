@@ -25,13 +25,14 @@ Tests run after hardening + reboot. All passed.
 
 Attack from the lab VM (`virbr0`) against this laptop: `tests/net-flows.sh` (flow table in its
 header). As the admin on the text console; the VM needs `nmap` (`sudo apt install nmap`), its sudo
-asks once. Results: `~/net-flows/<date-time>/` (report.txt, nmap -oG files, counters).
+asks once. Results: `$NET_FLOWS_DIR/<date-time>/` (report.txt, nmap -oG files, counters); the admin's home
+is locked, so `NET_FLOWS_DIR=~/admin-inbox/net-flows` there (default `~/net-flows`).
 
 | Check | Command | Expected |
 |---|---|---|
 | full run | `tests/net-flows.sh` (~10-15 min) | `0 FAIL`, exit 0 |
 | quick run | `tests/net-flows.sh --quick` (top 1000 tcp, ~4 min) | `0 FAIL` |
-| re-check saved results | `tests/net-flows.sh --evaluate ~/net-flows/<dir>` | same report, no scan |
+| re-check saved results | `tests/net-flows.sh --evaluate <results dir>` | same report, no scan |
 | laptop on `virbr0` | tcp all ports, source port 53, fragmented; udp top 100 + every UDP listener | open: `53/tcp`, `53/udp` only (dnsmasq); `67/udp` may answer |
 | stateful filter | ACK scan top 1000 | no port `unfiltered` but `53/tcp` (conntrack picks up a lone ACK as new: `nf_conntrack_tcp_loose=1`) |
 | laptop on the uplink / tunnel address | same scans | nothing open (dnsmasq binds `192.168.122.1` only; Mullvad's UDP socket unreachable) |
