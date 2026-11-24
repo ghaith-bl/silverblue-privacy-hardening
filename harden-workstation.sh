@@ -36,8 +36,11 @@ GUEST_TOOLS=(open-vm-tools-desktop open-vm-tools virtualbox-guest-additions spic
                              # override remove, next boot) when this machine is not a VM; () = keep
 ENABLE_NOISY_AUDIT="no"      # "yes" = log every chmod/chown/delete/denied-open by users (very noisy with Steam/Brave)
 MAKE_AUDIT_IMMUTABLE="yes"   # "yes" = audit rules locked until reboot (-e 2): a rule change needs a reboot
-SSH_SERVER="off"             # "on" = keep sshd usable (hardened) so other machines can SSH INTO this laptop.
-                             # Outgoing ssh from this laptop to VMs / homelab works either way.
+SSH_SERVER="off"             # sshd section: "off" = no SSH server at all: sshd masked, and systemd's own
+                             # local SSH socket too (kernel arg systemd.ssh_auto=no + masked).
+                             # "on" = sshd usable so other machines can SSH INTO this laptop: keys
+                             # only, members of group sshusers only; refused (stays masked) while
+                             # no member has a key. Outgoing ssh to VMs / homelab works either way.
 FINGERPRINT="disable"        # "keep" if you use a fingerprint reader ("disable" avoids fast faillock lockouts)
 MIC_DISABLE="all"            # WirePlumber: "all" = every mic off (laptop, jack, USB, Bluetooth)
                              # "internal" = laptop mic + 3.5mm jack mic off (USB / Bluetooth work)
@@ -1036,36 +1039,91 @@ EOF
   log "cron/at access limited to cron.allow / at.allow"
 }
 
+# sshd: CIS 5.1 values in a drop-in read before Fedora's 50-redhat.conf (first value wins).
+# Also when the server is off: a server turned on later by hand starts with them.
+# systemd >= 256 (systemd-ssh-generator) binds sshd to a local AF_UNIX socket,
+# /run/ssh-unix-local/socket, whenever the sshd binary is installed, even with sshd.service
+# masked (host 2026-11-24: active, mode 0666 = every local user, password login on).
+# That is a login path from the daily session to any account, the admin included, and
+# local access to sshd's pre-auth code. Off for good: kernel arg systemd.ssh_auto=no (the
+# generator binds nothing, next boot) + the generated sockets masked (now).
+SSHD_CONF=/etc/ssh/sshd_config.d/40-cis.conf
+SSH_GROUP=sshusers
+SSH_GEN_SOCKETS=(sshd-unix-local.socket sshd-vsock.socket)
+
+# have_sshd: the sshd binary is installed (tests replace it)
+have_sshd() { command -v sshd >/dev/null; }
+
+# ssh_key_members: members of SSH_GROUP with at least one key in ~/.ssh/authorized_keys
+ssh_key_members() {
+  local m home f
+  local -a keyed=()
+  for m in $(getent group "$SSH_GROUP" | cut -d: -f4 | tr ',' ' '); do
+    home=$(user_home "$m")
+    f="$home/.ssh/authorized_keys"
+    if [[ -n $home && -f $f ]] && awk '!/^[[:space:]]*#/ && /(^|[ ,"])(ssh-[a-z0-9-]+|ecdsa-sha2-[a-z0-9-]+|sk-[a-z0-9@.-]+) +AAAA/ { f = 1 }
+                                         END { exit !f }' "$f"; then
+      keyed+=("$m")
+    fi
+  done
+  echo "${keyed[*]}"
+}
+
 sec_sshd() {
-  write_file /etc/ssh/sshd_config.d/40-cis.conf 0600 <<'EOF'
+  write_file "$SSHD_CONF" 0600 <<'EOF'
 # Loaded before Fedora's 50-redhat.conf, so these values win.
 PermitRootLogin no
 PermitEmptyPasswords no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AllowGroups sshusers
 HostbasedAuthentication no
 IgnoreRhosts yes
 PermitUserEnvironment no
 GSSAPIAuthentication no
 DisableForwarding yes
+X11Forwarding no
+AllowTcpForwarding no
+AllowAgentForwarding no
+AllowStreamLocalForwarding no
+PermitTunnel no
 LogLevel VERBOSE
-MaxAuthTries 4
+MaxAuthTries 3
 MaxSessions 10
 MaxStartups 10:30:60
 LoginGraceTime 60
 ClientAliveInterval 15
 ClientAliveCountMax 3
 EOF
-  if command -v sshd >/dev/null && compgen -G '/etc/ssh/ssh_host_*_key' >/dev/null; then
+  if have_sshd && compgen -G '/etc/ssh/ssh_host_*_key' >/dev/null; then
     if ! sshd -t; then
-      rm -f /etc/ssh/sshd_config.d/40-cis.conf
-      warn "sshd -t failed - removed 40-cis.conf"; changed "removed /etc/ssh/sshd_config.d/40-cis.conf"
+      rm -f "$SSHD_CONF"
+      warn "sshd -t failed - removed $SSHD_CONF"; changed "removed $SSHD_CONF"
     fi
+  fi
+  # systemd's own SSH sockets: never wanted here, server on or off
+  if have_sshd; then
+    add_karg systemd.ssh_auto=no
+    mask_units "${SSH_GEN_SOCKETS[@]}"
   fi
   # Only the SSH *server* is affected; the ssh client (outgoing connections) is untouched.
   if [[ $SSH_SERVER == off ]]; then
     mask_units sshd.socket sshd.service
-  else
-    log "SSH server left available (hardened config applied)"
+    return 0
   fi
+  if ! getent group "$SSH_GROUP" >/dev/null; then
+    groupadd -r "$SSH_GROUP"; log "group $SSH_GROUP made (empty)"; changed "group $SSH_GROUP"
+  fi
+  local members
+  members=$(ssh_key_members)
+  if [[ -z $members ]]; then
+    mask_units sshd.socket sshd.service
+    warn "SSH_SERVER=on refused: no member of $SSH_GROUP has a key in ~/.ssh/authorized_keys - sshd stays masked"
+    warn "  add one: sudo gpasswd -a <user> $SSH_GROUP; the user's public key into ~/.ssh/authorized_keys; run sshd again"
+    return 0
+  fi
+  log "SSH server allowed for $SSH_GROUP (keys: $members); start it: sudo systemctl unmask --now sshd.service; sudo systemctl enable --now sshd.service"
 }
 
 sec_auditd() {

@@ -116,6 +116,8 @@ Tests run after hardening + reboot. All passed.
 | GNOME privacy keys | `dconf list-locks /org/gnome/desktop/`; `gsettings get org.gnome.desktop.privacy remember-recent-files` | the 13 privacy / notifications keys + `location/enabled`, `datetime/automatic-timezone` (15); `false` |
 | journal one month | `systemd-analyze cat-config systemd/journald.conf \| grep MaxRetention`; `journalctl --list-boots \| head -2` | `MaxRetentionSec=1month`; first boot not older than about a month |
 | no exposed listeners | `sudo ss -tulpn` | only localhost / `virbr0` / WireGuard |
+| SSH server fully off | `systemctl is-enabled sshd.service sshd.socket sshd-unix-local.socket`; `grep -o 'systemd.ssh_auto=[^ ]*' /proc/cmdline`; `ss -xl \| grep -c ssh-unix-local`; `ssh -o BatchMode=yes .host true` | `masked` x3; `systemd.ssh_auto=no` (after the reboot); `0`; fails (no socket) |
+| sshd config if ever on | `sudo sshd -T \| grep -E '^(passwordauthentication\|kbdinteractiveauthentication\|permitrootlogin\|allowgroups\|maxauthtries\|disableforwarding\|x11forwarding\|allowtcpforwarding\|allowagentforwarding) '` | `no`, `no`, `no`, `sshusers`, `3`, `yes`, `no`, `no`, `no` |
 | loopback (firewalld) | `sudo firewall-cmd --zone=trusted --list-all` | `interfaces: lo`, 2 rich rules (127.0.0.1, ::1) |
 | password age | `sudo chage -l <user>`; `grep -E '^PASS_(MAX\|MIN\|WARN)' /etc/login.defs` | `Minimum ... : 1`, `Maximum ... : 365`, `warning ... : 14` (both accounts); `365`, `1`, `14` |
 | cron dir modes | `sudo stat -c '%a %n' /etc/cron.d /etc/cron.daily` | `700` (also after an rpm-ostree update + reboot) |

@@ -84,7 +84,7 @@ sudo ./harden-workstation.sh all
 | `DISABLE_BLUETOOTH`    | `no`       | `yes` masks bluetooth.service |
 | `DISABLE_AVAHI`        | `yes`      | mDNS / network printer discovery off |
 | `GUEST_TOOLS`          | `(open-vm-tools-desktop open-vm-tools virtualbox-guest-additions spice-vdagent)` | `guesttools`: VM guest agents removed from the image on real hardware; `()` = keep |
-| `SSH_SERVER`           | `off`      | `off` masks sshd (incoming only, outgoing `ssh` works) |
+| `SSH_SERVER`           | `off`      | `off`: no SSH server at all, sshd and systemd's local SSH socket masked (kernel arg `systemd.ssh_auto=no`); `on`: keys only, group `sshusers` only, refused while no member has a key. Outgoing `ssh` works either way |
 | `FINGERPRINT`          | `disable`  | turn off `with-fingerprint` before enabling faillock; GDM fingerprint login off (locked) |
 | `MIC_DISABLE`          | `all`      | `all` (every mic: laptop, jack, USB, Bluetooth) / `internal` (laptop + jack mic) / `no`; via WirePlumber, speakers unaffected |
 | `ENABLE_NOISY_AUDIT`   | `no`       | DAC / delete / failed-open audit rules (very noisy with Steam / Brave) |
@@ -181,7 +181,7 @@ sudo harden-check --accept            # after a change you made or an OS update:
 | `guesttools`  | CIS Controls v8.1 4.8: `GUEST_TOOLS` removed from the image (`rpm-ostree override remove`, next boot) when the machine is not a VM and nothing else needs them: one setuid root program (`vmware-user-suid-wrapper`) and three agents started at login less. Their setuid files leave `55-privileged.rules` in the same go | none on real hardware; one reboot |
 | `loopback`    | firewalld: `lo` in zone `trusted`, 127.0.0.1 / ::1 as source only toward themselves | none |
 | `cron`        | root-only cron dirs (modes set again at every boot by tmpfiles), `cron.allow` / `at.allow` | crontab: root + the daily user; `at`: root only |
-| `sshd`        | hardened drop-in `40-cis.conf`, server masked | no incoming SSH |
+| `sshd`        | hardened drop-in `40-cis.conf` (keys only, group `sshusers`, no forwarding, 3 tries), server masked; systemd's local SSH socket (`/run/ssh-unix-local/socket`, any local user) off: masked now, kernel arg `systemd.ssh_auto=no` from the next boot | no incoming SSH, no `ssh .host` |
 | `auditd`      | SYSLOG / SUSPEND instead of HALT, log ring 40 x 32 MiB | up to 1280 MiB in `/var/log/audit` |
 | `audit-rules` | CIS rules in the scanner's text (path rules once per arch), `-c`, setuid list of the booted image, written again at every boot (`audit-privileged-sync.service`, before `audit-rules.service`; a failed scan keeps the old list), `-e 2` lock; not CIS: `af-alg`, `io-uring` (2 rules each). 53 + two per setuid program (this host: 105 with 26) | more log volume; a rule change needs a reboot |
 | `perms`       | audit config 0640, `/boot/grub2` files 0600 (set again at boot by tmpfiles), dotfiles in the homes 0740 or stricter (daily user and admin) | none |

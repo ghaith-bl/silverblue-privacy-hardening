@@ -259,6 +259,16 @@ compromise: change the password at once (`sudo passwd <user>` works the same day
   0.35 s, O_DIRECT 2 GiB read noisy (1.0 - 3.3 s), IOMMU faults 0, no felt slowdown in
   4 days (desktop, Steam on the iGPU). Undo: `rpm-ostree kargs --delete=...`, reboot.
 
+- `systemd.ssh_auto=no` (sshd section, 2026-11-24, not CIS): systemd >= 256 binds sshd
+  to `/run/ssh-unix-local/socket` (mode 0666) whenever the sshd binary is installed,
+  with sshd.service masked too (host 2026-11-24: active, password login on). Any local
+  user could log in to any account through it (the admin from the daily session) and
+  reach sshd's pre-auth code. Off: this arg (the generator binds nothing) + the
+  generated sockets masked. Lost: `ssh .host` / `ssh vsock/...` (systemd-ssh-proxy).
+  `openssh-server` stays in the image (no package removal). `AllowGroups sshusers` in
+  `40-cis.conf` (group missing while `SSH_SERVER=off` = nobody) is what
+  `sshd_limit_user_access` reads now.
+
 ## Kernel attack surface (not CIS: KSPP, 2026-11-16)
 
 Measured first: kernel-hardening-checker v0.6.17.1 (a13xp0p0v, KSPP / CLIP OS / grsecurity
