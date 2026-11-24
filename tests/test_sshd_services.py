@@ -2,7 +2,7 @@
 # tests for the sshd and services sections of harden-workstation.sh (stdlib + bash, no
 # root, nothing outside a temp dir): SSH server fully off (generated local sockets masked,
 # kernel arg systemd.ssh_auto=no), SSH_SERVER=on refused while no sshusers member has a
-# key.
+# key, printing masked with PRINTING=off.
 #
 #   python3 -I -m unittest discover -s tests -t .
 #
@@ -107,6 +107,18 @@ class Sections(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertNotIn('MASK sshd.socket', out)
         self.assertIn('SSH server allowed for sshusers (keys: bob)', out)
+
+    def test_printing_masked_when_off(self):
+        rc, out = self.bash('unit_exists() { return 1; }; PRINTING=off; DISABLE_AVAHI=no; '
+                            'DISABLE_BLUETOOTH=no; sec_services')
+        self.assertEqual(rc, 0, out)
+        self.assertIn('MASK cups-browsed.service cups.path cups.socket cups.service', out)
+
+    def test_printing_left_when_on(self):
+        rc, out = self.bash('unit_exists() { return 1; }; PRINTING=on; DISABLE_AVAHI=no; '
+                            'DISABLE_BLUETOOTH=no; sec_services')
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn('cups', out)
 
 
 if __name__ == '__main__':

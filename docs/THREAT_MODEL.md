@@ -88,7 +88,8 @@ studying, testing and adding, and this page changes with it.
 - network privacy: random MAC per network, a generic hostname, no DHCP ids from the
   machine, DNS only through the tunnel, no LLMNR / mDNS
 - services: no SSH server at all (also not systemd's own local SSH socket, which any
-  local user could reach with a password), no mDNS (avahi masked)
+  local user could reach with a password), no printing (CUPS, cups-browsed masked), no
+  mDNS (avahi masked)
 - detection: auditd (53 rules + two per setuid program, locked until reboot), journald,
   AIDE on /etc, /boot, root's scripts and crontabs + a daily root check (boot files = the
   image, sudoers, accounts; integrity section), sectop (live view)

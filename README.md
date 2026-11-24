@@ -85,6 +85,7 @@ sudo ./harden-workstation.sh all
 | `DISABLE_AVAHI`        | `yes`      | mDNS / network printer discovery off |
 | `GUEST_TOOLS`          | `(open-vm-tools-desktop open-vm-tools virtualbox-guest-additions spice-vdagent)` | `guesttools`: VM guest agents removed from the image on real hardware; `()` = keep |
 | `SSH_SERVER`           | `off`      | `off`: no SSH server at all, sshd and systemd's local SSH socket masked (kernel arg `systemd.ssh_auto=no`); `on`: keys only, group `sshusers` only, refused while no member has a key. Outgoing `ssh` works either way |
+| `PRINTING`             | `off`      | `off` masks CUPS + cups-browsed (no printing, no printer discovery); `on` = leave |
 | `FINGERPRINT`          | `disable`  | turn off `with-fingerprint` before enabling faillock; GDM fingerprint login off (locked) |
 | `MIC_DISABLE`          | `all`      | `all` (every mic: laptop, jack, USB, Bluetooth) / `internal` (laptop + jack mic) / `no`; via WirePlumber, speakers unaffected |
 | `ENABLE_NOISY_AUDIT`   | `no`       | DAC / delete / failed-open audit rules (very noisy with Steam / Brave) |
@@ -177,7 +178,7 @@ sudo harden-check --accept            # after a change you made or an OS update:
 | `pwage`       | password max age `PASS_MAX_DAYS`, min age `PASS_MIN_DAYS`, warning `PASS_WARN_AGE` (login.defs + every login account); no lock after expiry | change the password once a year; not twice in one day (root can: `sudo passwd <user>`) |
 | `su`          | `su` limited to the empty group `sugroup` | use `sudo` |
 | `accounts`    | CIS Controls v8.1 5.4: admin in wheel, hidden from and refused by GDM; daily user out of wheel, `mullvad`, `sectop`; homes 0700. Not CIS: the admin's shell start files from `accounts/` (fixed PATH, no `~/.bashrc.d`), immutable; the top of its home, `.config`, `.local`, `.local/share` (and its systemd / flatpak folders) immutable (nothing new there). Run 2 only from the admin | admin: text console only; its shell files and new files at those levels only after `sudo chattr -i`; daily user: no sudo, no Mullvad CLI |
-| `services`    | mask rpcbind / nfs / avahi, nftables.service | no mDNS |
+| `services`    | mask rpcbind / nfs / avahi, nftables.service; CIS 2.1: CUPS + cups-browsed (`PRINTING=off`) | no mDNS, no printing |
 | `guesttools`  | CIS Controls v8.1 4.8: `GUEST_TOOLS` removed from the image (`rpm-ostree override remove`, next boot) when the machine is not a VM and nothing else needs them: one setuid root program (`vmware-user-suid-wrapper`) and three agents started at login less. Their setuid files leave `55-privileged.rules` in the same go | none on real hardware; one reboot |
 | `loopback`    | firewalld: `lo` in zone `trusted`, 127.0.0.1 / ::1 as source only toward themselves | none |
 | `cron`        | root-only cron dirs (modes set again at every boot by tmpfiles), `cron.allow` / `at.allow` | crontab: root + the daily user; `at`: root only |

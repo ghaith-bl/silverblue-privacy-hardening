@@ -11,6 +11,7 @@ sudo sed -i 's/^minlen = .*/minlen = 14/' /etc/security/pwquality.conf   # pam: 
 sudo systemctl unmask <unit>                     # bring a service back
 sudo rpm-ostree kargs --delete=systemd.ssh_auto=no   # sshd: systemd's local SSH socket back at the
 sudo systemctl unmask sshd-unix-local.socket     # next boot (needs both lines)
+sudo systemctl unmask cups.socket cups.path cups.service cups-browsed.service   # printing back (PRINTING=on)
 sudo rpm-ostree override reset open-vm-tools-desktop open-vm-tools spice-vdagent   # guesttools: back at the
                                                  # next boot, its setuid rule too (audit-privileged-sync)
 sudo systemctl disable --now aidecheck.timer     # integrity: no daily check (database stays;

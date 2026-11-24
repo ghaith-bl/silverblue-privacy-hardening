@@ -41,6 +41,8 @@ SSH_SERVER="off"             # sshd section: "off" = no SSH server at all: sshd 
                              # "on" = sshd usable so other machines can SSH INTO this laptop: keys
                              # only, members of group sshusers only; refused (stays masked) while
                              # no member has a key. Outgoing ssh to VMs / homelab works either way.
+PRINTING="off"               # services section: "off" = CUPS + cups-browsed masked (no printing, no
+                             # printer discovery); "on" = leave them
 FINGERPRINT="disable"        # "keep" if you use a fingerprint reader ("disable" avoids fast faillock lockouts)
 MIC_DISABLE="all"            # WirePlumber: "all" = every mic off (laptop, jack, USB, Bluetooth)
                              # "internal" = laptop mic + 3.5mm jack mic off (USB / Bluetooth work)
@@ -892,6 +894,11 @@ sec_services() {
   mask_units rpcbind.socket rpcbind.service nfs-server.service
   if [[ $DISABLE_AVAHI == yes ]]; then mask_units avahi-daemon.socket avahi-daemon.service; fi
   if [[ $DISABLE_BLUETOOTH == yes ]]; then mask_units bluetooth.service; fi
+  # CIS 2.1 (print server not in use): no printer here; cups-browsed adds printers it finds
+  # on the network (CVE-2024-47176 chain: remote code as lp). The packages stay in the image.
+  if [[ $PRINTING == off ]]; then
+    mask_units cups-browsed.service cups.path cups.socket cups.service
+  fi
   # nftables.service must NOT be stopped live: its stop action flushes the whole
   # ruleset (firewalld, hostfw, Mullvad kill switch). Disable + mask only.
   if unit_exists nftables.service && [[ $(unit_state nftables.service) != masked* ]]; then
