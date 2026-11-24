@@ -90,6 +90,9 @@ sudo ./harden-workstation.sh all
 | `ENABLE_NOISY_AUDIT`   | `no`       | DAC / delete / failed-open audit rules (very noisy with Steam / Brave) |
 | `MAKE_AUDIT_IMMUTABLE` | `yes`      | `-e 2`: audit rules locked until reboot |
 | `IDLE_LOCK_SECONDS`    | `900`      | GNOME idle lock |
+| `LOCATION_OFF`         | `yes`      | `gnome`: location services + automatic time zone off (locked), `geoclue.service` masked; the time zone stays as set |
+| `GNOME_PRIVACY`        | `yes`      | `gnome`, locked: no recent-files list or app usage kept, trash / temp files older than `GNOME_OLD_FILES_DAYS` removed, no problem reports / usage stats, no notifications on the lock screen, no name in the top bar / identity in notifications, camera + microphone off for apps (portal) |
+| `GNOME_OLD_FILES_DAYS` | `1`        | `gnome`: days before trash / temp files are removed |
 | `PASS_MAX_DAYS`        | `365`      | `pwage`: password max age, new and existing accounts |
 | `PASS_MIN_DAYS`        | `1`        | `pwage`: min days between changes (pwhistory counts); `0` = none |
 | `PASS_WARN_AGE`        | `14`       | `pwage`: warning days before it expires |
@@ -168,7 +171,7 @@ sudo harden-check --accept            # after a change you made or an OS update:
 | `modules`     | blocks unused filesystems / protocols | no HFS / UDF mounts |
 | `coredump`    | no core dumps | crashes not saved |
 | `journald`    | persistent, compressed journal, no syslog forward, kept one month (`MaxRetentionSec=1month`; drop-in only) | journal entries older than a month are deleted |
-| `gnome`       | no automount / autorun, 15 min idle lock, no login user list (dconf `gdm`, all locked); GDM: password login only (switchable authentication, passkey, web login, smartcard off and locked; fingerprint with `FINGERPRINT=disable`) | type the user name at login; no other login method offered |
+| `gnome`       | no automount / autorun, 15 min idle lock, no login user list (dconf `gdm`, all locked); GDM: password login only (switchable authentication, passkey, web login, smartcard off and locked; fingerprint with `FINGERPRINT=disable`); location off + `geoclue.service` masked, privacy keys (dconf `local` `91-privacy`, locked) | type the user name at login; no other login method offered; no location for any app, no automatic time zone; no recent files list; trash emptied after `GNOME_OLD_FILES_DAYS` (1 day); lock screen shows no notifications |
 | `sudo`        | `use_pty`, `/var/log/sudo.log`, 5 min timeout | password asked again after 5 min |
 | `pam`         | faillock (5 tries -> 15 min), pwhistory (24), pwquality (15 chars, 4 classes, dictionary check), no empty passwords | lockout includes the lock screen |
 | `pwage`       | password max age `PASS_MAX_DAYS`, min age `PASS_MIN_DAYS`, warning `PASS_WARN_AGE` (login.defs + every login account); no lock after expiry | change the password once a year; not twice in one day (root can: `sudo passwd <user>`) |

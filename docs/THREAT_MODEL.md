@@ -82,8 +82,9 @@ studying, testing and adding, and this page changes with it.
   locked, nothing new can be put in its home), root locked; the login screen takes a
   password only
 - devices: USBGuard (only known USB devices), microphone off (WirePlumber; a program in
-  my session can still open the capture device), no camera, location service off (host;
-  into the script: planned)
+  my session can still open the capture device), no camera, location service off and
+  masked, GNOME privacy keys locked (no recent-files list, no notifications on the lock
+  screen)
 - network privacy: random MAC per network, a generic hostname, no DHCP ids from the
   machine, DNS only through the tunnel, no LLMNR / mDNS
 - detection: auditd (53 rules + two per setuid program, locked until reboot), journald,
@@ -163,7 +164,7 @@ Tor, Qubes and Tails list the same kind of limits.
   identity, browsevm for unknown links
 - device: microphone off (WirePlumber; a session program can still open
   the capture device), no camera,
-  location service masked
+  location service off and masked
 - account / behavior: an anonymous VPN account; logging in to an account links sessions
   whatever the network does (my practice, not something a config can enforce)
 - limits: a VPN moves trust to the provider (pseudonymity, not anonymity); the strongest

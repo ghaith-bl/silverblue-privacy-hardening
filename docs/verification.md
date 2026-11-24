@@ -112,6 +112,8 @@ Tests run after hardening + reboot. All passed.
 | sudo works | `sudo -k && sudo true` | OK |
 | sudo log | `sudo tail -3 /var/log/sudo.log` | recent commands |
 | microphone off | `wpctl status` | `Sources:` empty |
+| location off | `gsettings get org.gnome.system.location enabled`; `gsettings writable org.gnome.system.location enabled`; `systemctl is-enabled geoclue.service` | `false`; `false` (locked); `masked` |
+| GNOME privacy keys | `dconf list-locks /org/gnome/desktop/`; `gsettings get org.gnome.desktop.privacy remember-recent-files` | the 13 privacy / notifications keys + `location/enabled`, `datetime/automatic-timezone` (15); `false` |
 | journal one month | `systemd-analyze cat-config systemd/journald.conf \| grep MaxRetention`; `journalctl --list-boots \| head -2` | `MaxRetentionSec=1month`; first boot not older than about a month |
 | no exposed listeners | `sudo ss -tulpn` | only localhost / `virbr0` / WireGuard |
 | loopback (firewalld) | `sudo firewall-cmd --zone=trusted --list-all` | `interfaces: lo`, 2 rich rules (127.0.0.1, ::1) |

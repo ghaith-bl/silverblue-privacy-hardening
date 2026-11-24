@@ -43,6 +43,15 @@ MIC_DISABLE="all"            # WirePlumber: "all" = every mic off (laptop, jack,
                              # "internal" = laptop mic + 3.5mm jack mic off (USB / Bluetooth work)
                              # "no" = leave microphones alone
 IDLE_LOCK_SECONDS=900        # screen locks after 15 minutes idle
+LOCATION_OFF="yes"           # gnome section: GNOME location services and automatic time zone off
+                             # (locked; the time zone stays as set), geoclue.service masked;
+                             # "no" = leave
+GNOME_PRIVACY="yes"          # gnome section, locked: no recent-files list or app usage kept, trash +
+                             # temp files older than GNOME_OLD_FILES_DAYS removed, no problem
+                             # reports / usage stats, no notifications on the lock screen, no
+                             # name in the top bar / identity in notifications, camera +
+                             # microphone off for apps (portal); "no" = leave
+GNOME_OLD_FILES_DAYS=1       # gnome section (GNOME_PRIVACY): days before trash / temp files go
 PASS_MAX_DAYS=365            # pwage section: password max age (days) for new and existing accounts
 PASS_MIN_DAYS=1              # pwage section: min days between changes (pwhistory counts: no 24
                              # changes in a row back to the old password); 0 = none
@@ -105,6 +114,8 @@ CHANGE_LOG=""       # file: one line "<section> TAB <what>" per change (pipeline
 DONE_SECTIONS=()    # sections run to the end
 APPLIED_LIST="/etc/harden-workstation/applied"  # every section that ran to the end here once
                     # (name per line; harden-check reads it); tests point it elsewhere
+DCONF_DB="/etc/dconf/db"    # gnome section: system dconf databases (location / privacy
+                    # keyfiles); tests point it elsewhere
 MIC_OLD_RULE="/etc/udev/rules.d/71-no-capture.rules"  # mic section removes it (2026-11-23,
                     # broke the speakers); tests point it elsewhere
 
@@ -412,6 +423,70 @@ EOF
   fi
 }
 
+# gnome_privacy: dconf db "local" keyfile 91-privacy + its locks, from LOCATION_OFF and
+# GNOME_PRIVACY (both "no": the two files go). Locked keys: the user cannot turn them back
+# on in Settings. LOCATION_OFF: geoclue.service masked too (it serves the location over
+# D-Bus, Wi-Fi networks sent to a lookup service; with location off nothing should ask)
+gnome_privacy() {
+  local kf="$DCONF_DB/local.d/91-privacy" lk="$DCONF_DB/local.d/locks/91-privacy" f
+  local keys="" locks=""
+  if [[ $LOCATION_OFF == yes ]]; then
+    keys+='[org/gnome/system/location]
+enabled=false
+
+[org/gnome/desktop/datetime]
+automatic-timezone=false
+
+'
+    locks+='/org/gnome/system/location/enabled
+/org/gnome/desktop/datetime/automatic-timezone
+'
+  fi
+  if [[ $GNOME_PRIVACY == yes ]]; then
+    keys+="[org/gnome/desktop/privacy]
+remember-recent-files=false
+recent-files-max-age=1
+remember-app-usage=false
+remove-old-trash-files=true
+remove-old-temp-files=true
+old-files-age=uint32 ${GNOME_OLD_FILES_DAYS}
+report-technical-problems=false
+send-software-usage-stats=false
+hide-identity=true
+show-full-name-in-top-bar=false
+disable-camera=true
+disable-microphone=true
+
+[org/gnome/desktop/notifications]
+show-in-lock-screen=false
+
+"
+    locks+='/org/gnome/desktop/privacy/remember-recent-files
+/org/gnome/desktop/privacy/recent-files-max-age
+/org/gnome/desktop/privacy/remember-app-usage
+/org/gnome/desktop/privacy/remove-old-trash-files
+/org/gnome/desktop/privacy/remove-old-temp-files
+/org/gnome/desktop/privacy/old-files-age
+/org/gnome/desktop/privacy/report-technical-problems
+/org/gnome/desktop/privacy/send-software-usage-stats
+/org/gnome/desktop/privacy/hide-identity
+/org/gnome/desktop/privacy/show-full-name-in-top-bar
+/org/gnome/desktop/privacy/disable-camera
+/org/gnome/desktop/privacy/disable-microphone
+/org/gnome/desktop/notifications/show-in-lock-screen
+'
+  fi
+  if [[ -n $keys ]]; then
+    printf '%s' "${keys%$'\n'}" | write_file "$kf" 0644
+    printf '%s' "$locks" | write_file "$lk" 0644
+  else
+    for f in "$kf" "$lk"; do
+      if [[ -e $f || -L $f ]]; then backup "$f"; rm -f "$f"; log "removed $f"; changed "removed $f"; fi
+    done
+  fi
+  if [[ $LOCATION_OFF == yes ]]; then mask_units geoclue.service; fi
+}
+
 sec_gnome() {
   local profile_src content f
   if ! grep -qs 'system-db:local' /etc/dconf/profile/user /usr/share/dconf/profile/user; then
@@ -471,6 +546,7 @@ EOF
       backup "$f"; rm -f "$f"; log "removed $f (scanner copy)"; changed "removed $f"
     fi
   done
+  gnome_privacy
   if (( $(section_changes) )); then
     if dconf update; then log "dconf databases updated (log out/in to see changes)"
     else warn "dconf update failed - run: sudo dconf update"; fi

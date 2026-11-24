@@ -43,6 +43,10 @@ sudo chattr -i "$h"/{.bash_profile,.bashrc,.bash_logout,.inputrc}   # a folder t
                                                  # removed files: /var/backups/hardening/<ts>$h/)
 sudo rm /etc/dconf/db/gdm.d/90-cis-hardening /etc/dconf/db/gdm.d/locks/90-cis-hardening && sudo dconf update
                                                  # gnome: GDM login methods + user list back to defaults
+sudo rm /etc/dconf/db/local.d/91-privacy /etc/dconf/db/local.d/locks/91-privacy && sudo dconf update
+                                                 # gnome: location + privacy keys free again (LOCATION_OFF /
+                                                 # GNOME_PRIVACY=no, else the next run writes them back)
+sudo systemctl unmask geoclue.service           # location service usable again
 sudo rm /etc/systemd/system/mullvad-daemon.service.d/50-socket-group.conf
 sudo systemctl daemon-reload && sudo systemctl restart mullvad-daemon
 sudo systemctl disable --now kvmlan              # VMs blocked by Mullvad again (table deleted)

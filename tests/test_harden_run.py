@@ -387,5 +387,78 @@ class MicJournald(unittest.TestCase):
             self.assertIn(line, conf)
 
 
+class GnomePrivacy(unittest.TestCase):
+    """gnome_privacy (LOCATION_OFF, GNOME_PRIVACY): the dconf keyfile + locks it writes,
+    geoclue masked once; DCONF_DB in the temp dir, systemctl faked (unit state in a file)."""
+
+    FAKES = r'''
+        systemctl() { echo "systemctl $*" >> "$D/calls"
+          case $1 in
+            list-unit-files) echo "geoclue.service static" ;;
+            is-enabled) cat "$D/state" ;;
+            is-active) return 1 ;;
+            mask) echo masked > "$D/state" ;;
+          esac; }
+        [[ -f $D/state ]] || echo static > "$D/state"
+        : > "$D/calls"; DCONF_DB="$D/db"
+        sec_gnome() { CUR_SECTION=gnome; gnome_privacy; }
+    '''
+
+    setUp, tearDown, bash = Run.setUp, Run.tearDown, Run.bash
+
+    def run_gnome(self, loc, priv):
+        return self.bash(f'''D="{self.d}"
+            {self.FAKES}
+            LOCATION_OFF={loc} GNOME_PRIVACY={priv}
+            run_sections gnome
+            ''')
+
+    def test_both_on_then_no_change(self):
+        rc, out = self.run_gnome('yes', 'yes')
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r'gnome +3 change')     # keyfile, locks, geoclue masked
+        kf = read(os.path.join(self.d, 'db/local.d/91-privacy'))
+        for line in ('[org/gnome/system/location]', 'enabled=false', 'automatic-timezone=false',
+                     'remember-recent-files=false', 'remove-old-trash-files=true',
+                     'remove-old-temp-files=true', 'old-files-age=uint32 1',
+                     'remember-app-usage=false', 'hide-identity=true', 'disable-microphone=true',
+                     'report-technical-problems=false', 'send-software-usage-stats=false',
+                     'show-in-lock-screen=false'):
+            self.assertIn(line, kf.splitlines())
+        self.assertTrue(kf.endswith('false\n'))
+        locks = read(os.path.join(self.d, 'db/local.d/locks/91-privacy')).splitlines()
+        self.assertEqual(len(locks), 15)
+        # every lock names a key of the keyfile: /<section>/<key>
+        sec, keys = '', set()
+        for line in kf.splitlines():
+            if line.startswith('['):
+                sec = line.strip('[]')
+            elif '=' in line:
+                keys.add(f'/{sec}/{line.split("=")[0]}')
+        self.assertEqual(set(locks), keys)
+        self.assertIn('systemctl mask --now geoclue.service', read(os.path.join(self.d, 'calls')))
+        self.bk = os.path.join(self.d, 'backup2')
+        rc, out = self.run_gnome('yes', 'yes')
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r'gnome +no change')
+        self.assertNotIn('mask', read(os.path.join(self.d, 'calls')).replace('masked', ''))
+
+    def test_privacy_only_geoclue_left(self):
+        rc, out = self.run_gnome('no', 'yes')
+        self.assertEqual(rc, 0, out)
+        kf = read(os.path.join(self.d, 'db/local.d/91-privacy'))
+        self.assertNotIn('location', kf)
+        self.assertIn('remember-recent-files=false', kf)
+        self.assertNotIn('mask', read(os.path.join(self.d, 'calls')))
+
+    def test_both_off_removes_files(self):
+        self.run_gnome('yes', 'yes')
+        rc, out = self.run_gnome('no', 'no')
+        self.assertEqual(rc, 0, out)
+        self.assertRegex(out, r'gnome +2 change')
+        self.assertFalse(os.path.exists(os.path.join(self.d, 'db/local.d/91-privacy')))
+        self.assertFalse(os.path.exists(os.path.join(self.d, 'db/local.d/locks/91-privacy')))
+
+
 if __name__ == '__main__':
     unittest.main()
