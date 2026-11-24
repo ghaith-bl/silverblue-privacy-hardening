@@ -185,7 +185,11 @@ class Tool(unittest.TestCase):
         self.d = self.dir.name
         self.saved = {k: getattr(hc, k) for k in dir(hc) if k.isupper()}
         self.saved_fn = {'usr_etc_changes': hc.usr_etc_changes, 'run': hc.run,
-                         'booted_target': hc.booted_target}
+                         'booted_target': hc.booted_target,
+                         'journal_greeter_uids': hc.journal_greeter_uids,
+                         'live_greeter_uids': hc.live_greeter_uids,
+                         'greeter_file_ok': hc.greeter_file_ok, 'greeter_dir_ok': hc.greeter_dir_ok,
+                         'booted_deployment': hc.booted_deployment}
 
     def tearDown(self):
         for k, v in self.saved.items():
@@ -254,19 +258,19 @@ class Tool(unittest.TestCase):
         c = hc.check_aide(now, 'dep1')
         self.assertEqual(c.status, 'fail')
         self.assertEqual(c.summary, '3 changed since 2026-11-22T13:00+03:00: 3 other, '
-                                    '0 from the OS update')
+                                    '0 GDM greeter, 0 from the OS update')
         # new deployment: the update explains some (ostree diff of /usr/etc)
         hc.usr_etc_changes = lambda old, new: {'/etc/pki/x'} if (old, new) == ('dep1', 'dep2') else set()
         self.aide_setup({'changed': {'/etc/shadow': 'f', '/etc/ld.so.cache': 'f', '/etc/pki/x': 'f'}})
         c = hc.check_aide(now, 'dep2')
-        self.assertEqual(c.summary.split(': ')[1], '1 other, 2 from the OS update')
+        self.assertEqual(c.summary.split(': ')[1], '1 other, 0 GDM greeter, 2 from the OS update')
         self.assertEqual(c.items, ['other ~ /etc/shadow', 'update ~ /etc/ld.so.cache',
                                    'update ~ /etc/pki/x'])
         # old commit pruned: /etc not grouped, said so
         hc.usr_etc_changes = lambda old, new: None
         c = hc.check_aide(now, 'dep2')
         self.assertTrue(c.items[0].startswith('note: ostree diff'))
-        self.assertEqual(c.summary.split(': ')[1], '2 other, 1 from the OS update')
+        self.assertEqual(c.summary.split(': ')[1], '2 other, 0 GDM greeter, 1 from the OS update')
 
     def test_check_aide_stale_missing_many(self):
         now = time.time()
@@ -280,9 +284,117 @@ class Tool(unittest.TestCase):
         self.assertIn('no database', hc.check_aide(now, 'dep1').summary)
         self.aide_setup({'added': {f'/etc/n{i:04d}': 'f' for i in range(450)}}, accepted=None)
         c = hc.check_aide(now, 'dep1')
-        self.assertEqual(c.summary, '450 changed: 450 other, 0 from the OS update')
+        self.assertEqual(c.summary, '450 changed: 450 other, 0 GDM greeter, 0 from the OS update')
         self.assertEqual(len(c.items), hc.MAX_ITEMS + 1)
-        self.assertEqual(c.items[-1], '... 250 more: sudo harden-check --accept shows all')
+        self.assertEqual(c.items[-1], '... 250 more: sudo harden-check --list shows all')
+
+    # --- GDM greeter drop-ins (host 2026-11-24, admin 62 / 63) --------------------------
+
+    SC = '/etc/systemd/system.control/'
+    # a drop-in as logind writes it (systemctl set-property form)
+    DROPIN = ('# This is a drop-in unit file extension, created via "systemctl set-property"\n'
+              '# or an equivalent operation. Do not edit.\n[Slice]\n{}\n')
+    PAM = ('pam_unix(gdm-launch-environment:session): session opened for user '
+           'gdm-greeter(uid={}) by (uid=0)')
+
+    def test_greeter_uid(self):
+        self.assertEqual(hc.greeter_uid(self.SC + 'user-60580.slice.d'), 60580)
+        self.assertEqual(hc.greeter_uid(self.SC + 'user@60580.service.d/50-MemoryMin.conf'), 60580)
+        self.assertEqual(hc.greeter_uid(self.SC + 'user-60705.slice.d/50-CPUWeight.conf'), 60705)
+        self.assertIsNone(hc.greeter_uid(self.SC + 'user-1000.slice.d/50-CPUWeight.conf'))
+        self.assertIsNone(hc.greeter_uid(self.SC + 'user-60706.slice.d'))
+        self.assertIsNone(hc.greeter_uid(self.SC + 'user-60580.slice.d/50-TasksMax.conf'))
+        self.assertIsNone(hc.greeter_uid(self.SC + 'user-60580.slice.d/override.conf'))
+        self.assertIsNone(hc.greeter_uid('/etc/systemd/system/user-60580.slice.d'))
+
+    def test_journal_greeter_uids_root_lines_only(self):
+        lines = '\n'.join([
+            json.dumps({'MESSAGE': self.PAM.format(60580), '_UID': '0'}),
+            json.dumps({'MESSAGE': self.PAM.format(60581), '_UID': '1000'}),   # logger line
+            json.dumps({'MESSAGE': self.PAM.replace('gdm-greeter', 'gdm-greeter-3')
+                        .format(60582), '_UID': '0'}),
+            json.dumps({'MESSAGE': 'session opened for user gdm-greeter(uid=60583)', '_UID': '0'}),
+            'not json', '[1]'])
+        self.assertEqual(hc.journal_greeter_uids(lines), {60580, 60582})
+        hc.run = lambda argv, timeout=120: hc.subprocess.CompletedProcess(argv, 1, '', '')
+        self.assertEqual(hc.journal_greeter_uids(), set())        # no line: grep exit 1
+        hc.run = lambda argv, timeout=120: hc.subprocess.CompletedProcess(
+            argv, 0, json.dumps({'MESSAGE': self.PAM.format(60600), '_UID': '0'}) + '\n', '')
+        self.assertEqual(hc.journal_greeter_uids(), {60600})
+
+    def test_greeter_files(self):
+        hc.GREETER_OWNER = os.getuid()
+        d = self.p('user-60580.slice.d')
+        write(os.path.join(d, '50-CPUWeight.conf'), self.DROPIN.format('CPUWeight=100'), 0o644)
+        write(os.path.join(d, '50-MemoryMin.conf'), self.DROPIN.format('MemoryMin=0'), 0o644)
+        os.chmod(d, 0o755)              # Fedora users have umask 0002: folder group writable
+        self.assertTrue(hc.greeter_file_ok(os.path.join(d, '50-CPUWeight.conf'), 'CPUWeight'))
+        self.assertTrue(hc.greeter_dir_ok(d))
+        self.assertFalse(hc.greeter_file_ok(os.path.join(d, '50-CPUWeight.conf'), 'IOWeight'))
+        bad = os.path.join(d, '50-IOWeight.conf')
+        for text in ('[Slice]\nIOWeight=100\nExecStart=/bin/sh\n', '[Slice]\nIOWeight=x\n',
+                     '[Unit]\nIOWeight=100\n', '', '[Slice]\nIOWeight=100 200\n'):
+            write(bad, text, 0o644)
+            self.assertFalse(hc.greeter_file_ok(bad, 'IOWeight'), text)
+            self.assertFalse(hc.greeter_dir_ok(d), text)
+        write(bad, '[Service]\nIOWeight=100\n', 0o664)              # group writable
+        self.assertFalse(hc.greeter_file_ok(bad, 'IOWeight'))
+        os.chmod(bad, 0o644)
+        self.assertTrue(hc.greeter_dir_ok(d))
+        write(os.path.join(d, 'other.conf'), '[Slice]\nCPUWeight=100\n', 0o644)
+        self.assertFalse(hc.greeter_dir_ok(d))                        # a file of another name
+        os.unlink(os.path.join(d, 'other.conf'))
+        os.symlink(bad, os.path.join(d, '50-MemoryLow.conf'))
+        self.assertFalse(hc.greeter_dir_ok(d))                        # a link
+        os.unlink(os.path.join(d, '50-MemoryLow.conf'))
+        hc.GREETER_OWNER = os.getuid() + 1
+        self.assertFalse(hc.greeter_dir_ok(d))                        # not the owner
+
+    def test_check_aide_greeter_group(self):
+        now = time.time()
+        hc.journal_greeter_uids = lambda lines=None: {60580}
+        hc.live_greeter_uids = lambda: set()
+        hc.greeter_file_ok = lambda path, prop: True
+        hc.greeter_dir_ok = lambda path: True
+        new = [self.SC + 'user-60580.slice.d', self.SC + 'user-60580.slice.d/50-CPUWeight.conf',
+               self.SC + 'user@60580.service.d', self.SC + 'user@60580.service.d/50-IOWeight.conf']
+        report = {'added': {p: 'f' for p in new + [self.SC + 'user-60590.slice.d',
+                                                     self.SC + 'user-1000.slice.d']},
+                  'removed': {self.SC + 'user-60580.slice.d/50-MemoryLow.conf': 'f'},
+                  'changed': {'/etc/ssh/sshd_config': 'f'}}
+        self.aide_setup(report)
+        c = hc.check_aide(now, 'dep1')
+        self.assertEqual(c.summary, '8 changed since 2026-11-22T13:00+03:00: 3 other, '
+                                    '5 GDM greeter, 0 from the OS update')
+        self.assertEqual(c.items[:3], ['other ~ /etc/ssh/sshd_config',
+                                       'other + ' + self.SC + 'user-1000.slice.d',
+                                       'other + ' + self.SC + 'user-60590.slice.d'])
+        self.assertTrue(all(i.startswith('greeter ') for i in c.items[3:]))
+        # content not as logind writes it: other
+        hc.greeter_file_ok = lambda path, prop: not path.endswith('IOWeight.conf')
+        c = hc.check_aide(now, 'dep1')
+        self.assertIn('4 other, 4 GDM greeter', c.summary)
+        # no journal line, no greeter now: all other
+        hc.journal_greeter_uids = lambda lines=None: set()
+        c = hc.check_aide(now, 'dep1')
+        self.assertIn('8 other, 0 GDM greeter', c.summary)
+        hc.live_greeter_uids = lambda: {60590}
+        self.assertIn('7 other, 1 GDM greeter', hc.check_aide(now, 'dep1').summary)
+
+    def test_list(self):
+        hc.booted_deployment = lambda cmdline=None: ('dep1', '')   # not this host's ostree=
+        hc.journal_greeter_uids = lambda lines=None: set()
+        hc.live_greeter_uids = lambda: set()
+        self.aide_setup({'changed': {'/etc/shadow': 'f', '/etc/tab\tx': 'f'}})
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(hc.do_list(), 0)
+        self.assertEqual(buf.getvalue(), 'other\t~\t/etc/shadow\nother\t~\t/etc/tab x\n')
+        os.unlink(hc.AIDE_JSON)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(hc.do_list(), 1)
 
     def test_boot_image(self):
         boot = self.p('boot')

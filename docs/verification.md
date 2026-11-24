@@ -32,6 +32,7 @@ Tests run after hardening + reboot. All passed.
 | result mode | `stat -c '%a %U:%G' /var/lib/harden-check /var/lib/harden-check/result` | `750 root:sectop`, `640 root:sectop` |
 | a change shows | `sudo touch /etc/harden-test && sudo systemctl start aidecheck.service` | sectop `harden-check` yellow, item `other + /etc/harden-test`; then `sudo rm /etc/harden-test`, start again: green |
 | accept | `sudo harden-check --accept` | lists the changes, `y` = new baseline, check again |
+| change groups | `sudo harden-check --list` | one line per change: `update` / `greeter` / `other`, kind, path; after a log out / in: `greeter + /etc/systemd/system.control/user-<uid>.slice.d` (uid 60578-60705), its `50-*.conf` files |
 | scanner | OpenSCAP `package_aide_installed`, `aide_build_database`, `aide_check_audit_tools` | pass (`aide_periodic_cron_checking`: false positive row) |
 
 ## Account split (2026-11-05)

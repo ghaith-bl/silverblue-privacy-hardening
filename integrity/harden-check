@@ -8,8 +8,11 @@ Installed root-owned in /usr/local/sbin by harden-workstation.sh integrity. Neve
   harden-check --accept   admin, text console: aide --update, shows every change, y = the
                           new database is the baseline (only the admin accepts: the daily
                           user can never take a change in by itself)
+  harden-check --list     every change of the last aide report, one per line: group, kind,
+                          path (admin scripts explain the "other" ones before an accept)
 
-Checks: aide (files changed since the last accept, grouped: from an OS update / other),
+Checks: aide (files changed since the last accept, grouped: from an OS update / GDM greeter
+/ other),
 boot-image (kernel + initramfs in /boot = the copy in the image: the initramfs is not
 covered by Secure Boot), sudoers, auditd-conf, audit-loaded, accounts, firewalld-conf,
 bpf-jit, applied. RESULT is read by sectop (posture row harden-check): root-owned,
@@ -66,6 +69,21 @@ UPDATE_TREES = ("/boot/ostree/", "/boot/loader")
 AUDIT_TOOLS = ("/usr/sbin/auditctl", "/usr/sbin/auditd", "/usr/sbin/ausearch",
                "/usr/sbin/aureport", "/usr/sbin/audispd", "/usr/sbin/augenrules")
 SAFE = re.compile(r"[^\x20-\x7e]")
+# GDM 50 runs the login screen as a dynamic user gdm-greeter[-N] (uid range of systemd's
+# greeter users, systemd.io/UIDS-GIDS: 60578-60705); logind writes resource drop-ins for
+# every new uid (host 2026-11-24: one property line per file, same values each time).
+# Grouped "greeter" only when each file is that one line, the folders hold nothing else,
+# all root-owned, and the journal holds GDM's PAM line for the uid, written by root.
+GREETER_UIDS = range(60578, 60706)
+GREETER_OWNER = 0                # owner of the drop-ins (tests: their own uid)
+GREETER_RE = re.compile(r"/etc/systemd/system\.control/user(?:-(\d+)\.slice|@(\d+)\.service)\.d"
+                        r"(?:/50-(CPUWeight|IOWeight|MemoryLow|MemoryMin)\.conf)?")
+GREETER_FILE_RE = re.compile(r"50-(CPUWeight|IOWeight|MemoryLow|MemoryMin)\.conf")
+GREETER_VALUE_RE = re.compile(r"\d{1,6}")
+GREETER_PAM = re.compile(r"pam_unix\(gdm-launch-environment:session\): session opened for "
+                         r"user gdm-greeter(?:-\d+)?\(uid=(\d+)\)")
+GREETER_JOURNAL = ["journalctl", "-q", "--no-pager", "-o", "json", "--since=-30d",
+                   "--output-fields=MESSAGE,_UID", "-g", "session opened for user gdm-greeter"]
 # --init / --accept run aide the way aidecheck.service does (same SELinux domain change,
 # capabilities, umask, no network): a file one run can read and the other cannot would
 # show as a change (tests/test_integrity.py: same as integrity/aidecheck.service)
@@ -167,6 +185,131 @@ def update_explained(path: str, etc_changes: set | None) -> bool:
     return etc_changes is not None and path in etc_changes
 
 
+# --- GDM greeter drop-ins ----------------------------------------------------------------
+
+def greeter_uid(path: str) -> int | None:
+    """uid of a greeter drop-in path (folder or file) in the greeter range, else None."""
+    m = GREETER_RE.fullmatch(path)
+    if not m:
+        return None
+    uid = int(m.group(1) or m.group(2))
+    return uid if uid in GREETER_UIDS else None
+
+
+def journal_greeter_uids(lines: str = None) -> set:
+    """uids of GDM greeter sessions in the journal (30 days, kept a month): PAM lines
+    written by root only (_UID 0, set by journald: a user's logger line has its own)."""
+    if lines is None:
+        try:
+            r = run(GREETER_JOURNAL)
+        except (OSError, subprocess.TimeoutExpired):
+            return set()
+        if r.returncode not in (0, 1):
+            return set()
+        lines = r.stdout
+    out = set()
+    for line in lines.splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict) or e.get("_UID") != "0":
+            continue
+        m = GREETER_PAM.search(str(e.get("MESSAGE", "")))
+        if m:
+            out.add(int(m.group(1)))
+    return out
+
+
+def greeter_file_ok(path: str, prop: str) -> bool:
+    """Regular, root-owned, not group / other writable, and only the one line
+    <prop>=<number> (besides comments, empty lines and a [Slice] / [Service] header)."""
+    try:
+        st = os.lstat(path)
+        if not os.path.isfile(path) or os.path.islink(path) or st.st_uid != GREETER_OWNER \
+                or st.st_mode & 0o022 or st.st_size > 4096:
+            return False
+        text = read(path)
+    except OSError:
+        return False
+    keys = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(("#", ";")) or line in ("[Slice]", "[Service]"):
+            continue
+        keys.append(line)
+    if len(keys) != 1 or "=" not in keys[0]:
+        return False
+    k, v = keys[0].split("=", 1)
+    return k == prop and GREETER_VALUE_RE.fullmatch(v) is not None
+
+
+def greeter_dir_ok(path: str) -> bool:
+    """Root-owned folder, not group / other writable, holding only good property files."""
+    try:
+        st = os.lstat(path)
+        if not os.path.isdir(path) or os.path.islink(path) or st.st_uid != GREETER_OWNER \
+                or st.st_mode & 0o022:
+            return False
+        names = os.listdir(path)
+    except OSError:
+        return False
+    for n in names:
+        m = GREETER_FILE_RE.fullmatch(n)
+        if not m or not greeter_file_ok(os.path.join(path, n), m.group(1)):
+            return False
+    return True
+
+
+def greeter_explained(kind: str, path: str, proven: set) -> bool:
+    """A greeter drop-in (added / changed: as logind writes it; removed: the name is
+    enough) of a uid the journal shows as a GDM greeter session."""
+    uid = greeter_uid(path)
+    if uid is None or uid not in proven:
+        return False
+    if kind == "-":
+        return True
+    m = GREETER_RE.fullmatch(path)
+    return greeter_file_ok(path, m.group(3)) if m.group(3) else greeter_dir_ok(path)
+
+
+def group_entries(entries: list, booted: str, notes: list = None) -> list:
+    """[(group, kind, path)]: group update (an OS update since the last accept), greeter
+    (GDM login screen drop-ins), other. notes gets a line when ostree cannot tell."""
+    acc, _ = read_accepted()
+    new_deployment = bool(acc and booted and acc != booted)
+    etc = set()
+    if new_deployment:
+        etc = usr_etc_changes(acc, booted)
+        if etc is None and notes is not None:
+            notes.append(f"note: ostree diff {acc[:10]}..{booted[:10]} not possible "
+                         "(old commit pruned): /etc changes not grouped")
+    proven = None
+    out = []
+    for kind, path in entries:
+        if new_deployment and update_explained(path, etc):
+            out.append(("update", kind, path))
+            continue
+        if greeter_uid(path) is not None:
+            if proven is None:
+                proven = journal_greeter_uids() | live_greeter_uids()
+            if greeter_explained(kind, path, proven):
+                out.append(("greeter", kind, path))
+                continue
+        out.append(("other", kind, path))
+    return out
+
+
+def live_greeter_uids() -> set:
+    """uids of gdm-greeter users known now (a login screen showing)."""
+    import pwd
+    try:
+        return {p.pw_uid for p in pwd.getpwall()
+                if p.pw_name.startswith("gdm-greeter") and p.pw_uid in GREETER_UIDS}
+    except OSError:
+        return set()
+
+
 def check_aide(now: float, booted: str) -> Check:
     c = Check("aide")
     if not os.path.exists(AIDE_DB):
@@ -182,29 +325,26 @@ def check_aide(now: float, booted: str) -> Check:
         return c.set("fail", f"aide did not report this run (report {int(age // 3600)} h old): "
                              "journalctl -u aidecheck.service")
     entries = aide_entries(report)
-    acc, acc_time = read_accepted()
+    _, acc_time = read_accepted()
     since = f" since {acc_time}" if acc_time else ""
     total = (report.get("number_of_entries") or {}).get("total", "?")
     if not entries:
         return c.set("pass", f"{total} entries, no change{since}")
-    upd = []
-    if acc and booted and acc != booted:
-        etc = usr_etc_changes(acc, booted)
-        upd = [e for e in entries if update_explained(e[1], etc)]
-        if etc is None:
-            c.item(f"note: ostree diff {acc[:10]}..{booted[:10]} not possible "
-                   "(old commit pruned): /etc changes not grouped")
-    other = [e for e in entries if e not in upd]
+    notes = []
+    grouped = group_entries(entries, booted, notes)
+    for n in notes:
+        c.item(n)
+    count = {g: sum(1 for e in grouped if e[0] == g) for g in ("other", "greeter", "update")}
     shown = 0
-    for group, lst in (("other", other), ("update", upd)):
-        for kind, path in lst:
-            if shown < MAX_ITEMS:
+    for group in ("other", "greeter", "update"):
+        for g, kind, path in grouped:
+            if g == group and shown < MAX_ITEMS:
                 c.item(f"{group} {kind} {path}")
                 shown += 1
     if shown < len(entries):
-        c.item(f"... {len(entries) - shown} more: sudo harden-check --accept shows all")
-    return c.set("fail", f"{len(entries)} changed{since}: {len(other)} other, "
-                         f"{len(upd)} from the OS update")
+        c.item(f"... {len(entries) - shown} more: sudo harden-check --list shows all")
+    return c.set("fail", f"{len(entries)} changed{since}: {count['other']} other, "
+                         f"{count['greeter']} GDM greeter, {count['update']} from the OS update")
 
 
 # --- boot files = image -----------------------------------------------------------------
@@ -584,6 +724,23 @@ def do_accept() -> int:
     return 0
 
 
+def do_list() -> int:
+    """Every change of the last aide report: group<TAB>kind<TAB>path (no limit)."""
+    try:
+        report = json.loads(read(AIDE_JSON))
+    except (OSError, ValueError) as e:
+        print(f"harden-check --list: {AIDE_JSON}: {e}", file=sys.stderr)
+        return 1
+    booted, _ = booted_deployment()
+    notes = []
+    grouped = group_entries(aide_entries(report), booted, notes)
+    for n in notes:
+        print(f"# {n}")
+    for g, kind, path in grouped:
+        print(f"{g}\t{kind}\t{clean(path)}")
+    return 0
+
+
 def main(argv: list) -> int:
     if os.geteuid() != 0:
         print("harden-check: run as root (aidecheck.service, or sudo for --accept)", file=sys.stderr)
@@ -596,7 +753,9 @@ def main(argv: list) -> int:
         return do_init()
     if argv == ["--accept"]:
         return do_accept()
-    print("usage: harden-check [--init | --accept]", file=sys.stderr)
+    if argv == ["--list"]:
+        return do_list()
+    print("usage: harden-check [--init | --accept | --list]", file=sys.stderr)
     return 2
 
 
