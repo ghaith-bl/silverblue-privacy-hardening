@@ -307,3 +307,4 @@ Not taken:
 | `cfi=kcfi` | kernel built without `CONFIG_CFI` (IBT is on) |
 | `kernel.perf_event_paranoid = 3` | needs a distro patch the Fedora kernel does not carry: no effect |
 | `efi=disable_early_pci_dma` | some machines do not boot with it: own trial later, alone |
+| `modprobe.blacklist=thunderbolt` | my decision 2026-11-24: the Thunderbolt 4 port has security level `user`, IOMMU DMA protection and firmware pre-boot DMA protection, no device ever approved; those are enough for a port I do not use |

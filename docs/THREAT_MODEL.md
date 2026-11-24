@@ -208,8 +208,13 @@ Tor, Qubes and Tails list the same kind of limits.
 - browsevm: Mullvad Browser with the Mullvad extension's proxy on exits from another
   Mullvad server than the host (Mullvad itself sees both); Brave, or the proxy off: the
   host's VPN exit. Tor Browser in browsevm: planned
-- Thunderbolt: security level `user`, DMA protection by the IOMMU on (measured
-  `iommu_dma_protection` 1); a new device needs approval
+- Thunderbolt: one USB-C port is Thunderbolt 4 / USB4 (Alder Lake-P). Security level
+  `user`, DMA protection by the IOMMU on (`iommu_dma_protection` 1), firmware pre-boot
+  DMA protection on (fwupd HSI `PrebootDma`); no device ever approved (`bootacl 0/0`,
+  measured 2026-11-24). A new device needs my approval before it gets PCIe; even then
+  the IOMMU limits it to its own buffers. The driver stays loaded (my decision
+  2026-11-24): blocking it would close the port's PCIe path completely, these layers are
+  enough for a port I do not use. sectop shows it when the level or the DMA protection change
 - journal: persistent, kept one month (`MaxRetentionSec=1month`, journald section,
   2026-11-23); before: only journald's default size cap, 2.9 GB, history since 2026-07
 - admin account: scripts from my daily session run as the admin, after I read them in
