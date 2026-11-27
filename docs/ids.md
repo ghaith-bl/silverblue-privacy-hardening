@@ -2,7 +2,8 @@
 
 Suricata 8 (Fedora's package, layered) watches the network this laptop is on and its VM
 bridges. IDS only: it reads copies of packets, never drops one (hostfw and firewalld
-decide). sectop shows the alerts (ids box, critical ones in the alert bar).
+decide). sectop shows the alerts (ids box, critical ones in the alert bar) and, from the
+DHCP records, the DHCP servers per network (lan box).
 
 ## What it sees, what it cannot
 
@@ -35,8 +36,12 @@ decide). sectop shows the alerts (ids box, critical ones in the alert bar).
   plain User-Agent, `suricata -T` before the new rules replace the old ones, then a rule
   reload (SIGUSR2). `IDS_RULES_UPDATE=no`: local rules only, no download.
 - Rogue DHCP and a gateway MAC change: not as rules (a new network's own DHCP server
-  would alert at every join, before the network part is rewritten). From eve's DHCP
-  records + the ARP table, per known network, in sectop (step 11b).
+  would alert at every join, before the network part is rewritten). In sectop's lan box
+  (step 11b2a, sectop docs/modules/lan.md): the router's MAC per network from the ARP
+  table against the routers accepted there (`sudo ./install.sh --lan-accept` in the
+  sectop clone), the router's MAC on a second address, and a DHCP server in eve's DHCP
+  records that is not the router (uplink) or not this host (VM bridge). Red alerts.
+  Ids only (HMAC with a local key): no MAC or Wi-Fi name in sectop's files or screen.
 
 ## Logs (privacy)
 
