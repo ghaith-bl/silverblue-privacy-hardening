@@ -74,6 +74,7 @@ is locked, so `NET_FLOWS_DIR=~/admin-inbox/net-flows` there (default `~/net-flow
 | accept | `sudo harden-check --accept` (text console) | counts per group (other / greeter / update), the `other` items numbered page by page (`less`, no shell escape), the full numbered list in `/tmp/from-admin/aide-accept-<time>.txt` (0644 root, readable by the daily user); wrong code 3 times or `0` = nothing taken; the right code = new baseline, list kept in `/var/lib/harden-check/accepts/` (0600, last 20), check again |
 | accept binds | change `aide.db.new.gz` while the code question waits (a second accept) | "changed while you read the list", nothing taken |
 | change groups | `sudo harden-check --list` | one line per change: `update` / `greeter` / `other`, kind, path; after a log out / in: `greeter + /etc/systemd/system.control/user-<uid>.slice.d` (uid 60578-60705), its `50-*.conf` files |
+| update group, old commit pruned | after an OS update whose old deployment is gone: `sudo harden-check --list` | first line `# note: ostree diff ... compared with /usr/etc instead`; an `/etc` file equal to its `/usr/etc` copy (content, type, mode, owner; no label / ACL / xattr change) and `55-privileged.rules` equal to `audit-privileged-sync --print` (root, not g/o writable) are `update`, `audit.rules` + `.prev` too |
 | scanner | OpenSCAP `package_aide_installed`, `aide_build_database`, `aide_check_audit_tools` | pass (`aide_periodic_cron_checking`: false positive row) |
 
 ## Account split (2026-11-05)

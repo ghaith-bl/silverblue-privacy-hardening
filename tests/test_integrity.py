@@ -229,6 +229,9 @@ class Tool(unittest.TestCase):
         self.assertTrue(hc.update_explained('/etc/ld.so.cache', set()))
         self.assertTrue(hc.update_explained('/etc/selinux/targeted/policy/policy.35', set()))
         self.assertTrue(hc.update_explained('/usr/sbin/auditctl', set()))
+        self.assertTrue(hc.update_explained('/etc/audit/audit.rules', set()))
+        self.assertTrue(hc.update_explained('/etc/audit/audit.rules.prev', set()))
+        self.assertFalse(hc.update_explained('/etc/audit/rules.d/30-x.rules', set()))
         self.assertFalse(hc.update_explained('/etc/shadow', etc))
         self.assertFalse(hc.update_explained('/etc/pki/other', None))
         self.assertFalse(hc.update_explained('/var/usrlocal/sbin/hostfw', etc))
@@ -266,8 +269,9 @@ class Tool(unittest.TestCase):
         self.assertEqual(c.summary.split(': ')[1], '1 other, 0 GDM greeter, 2 from the OS update')
         self.assertEqual(c.items, ['other ~ /etc/shadow', 'update ~ /etc/ld.so.cache',
                                    'update ~ /etc/pki/x'])
-        # old commit pruned: /etc not grouped, said so
+        # old commit pruned: /etc compared with /usr/etc (none here: not grouped), said so
         hc.usr_etc_changes = lambda old, new: None
+        hc.ETC, hc.USR_ETC = self.p('etc'), self.p('usr', 'etc')
         c = hc.check_aide(now, 'dep2')
         self.assertTrue(c.items[0].startswith('note: ostree diff'))
         self.assertEqual(c.summary.split(': ')[1], '2 other, 0 GDM greeter, 1 from the OS update')
@@ -287,6 +291,79 @@ class Tool(unittest.TestCase):
         self.assertEqual(c.summary, '450 changed: 450 other, 0 GDM greeter, 0 from the OS update')
         self.assertEqual(len(c.items), hc.MAX_ITEMS + 1)
         self.assertEqual(c.items[-1], '... 250 more: sudo harden-check --list shows all')
+
+    def test_same_as_image(self):
+        """Old commit pruned (host 2026-11-27, admin 78): an /etc file the same as the
+        image's /usr/etc copy came with the update."""
+        hc.ETC, hc.USR_ETC = self.p('etc'), self.p('usr', 'etc')
+        for root in (hc.ETC, hc.USR_ETC):
+            write(os.path.join(root, 'pki', 'cacerts'), 'certs', 0o644)
+            write(os.path.join(root, 'brlapi.key'), 'key', 0o640)
+            os.symlink('cacerts', os.path.join(root, 'pki', 'link'))
+        e = lambda *x: os.path.join(hc.ETC, *x)        # noqa: E731
+        self.assertTrue(hc.same_as_image('~', e('pki', 'cacerts')))
+        self.assertTrue(hc.same_as_image('~', e('brlapi.key'), {'sha512', 'size'}))
+        self.assertTrue(hc.same_as_image('~', e('pki', 'link')))
+        self.assertTrue(hc.same_as_image('~', e('pki')))
+        self.assertFalse(hc.same_as_image('~', e('brlapi.key'), {'sha512', 'selinux'}))
+        write(e('brlapi.key'), 'other', 0o640)
+        self.assertFalse(hc.same_as_image('~', e('brlapi.key')))          # content
+        write(e('brlapi.key'), 'key', 0o644)
+        self.assertFalse(hc.same_as_image('~', e('brlapi.key')))          # mode
+        self.assertFalse(hc.same_as_image('+', e('new.conf')))            # not in the image
+        self.assertTrue(hc.same_as_image('-', e('gone.conf')))            # gone from both
+        write(os.path.join(hc.USR_ETC, 'kept.conf'), 'x')
+        self.assertFalse(hc.same_as_image('-', e('kept.conf')))           # image still has it
+        self.assertFalse(hc.same_as_image('~', '/var/x'))
+
+    def test_pruned_commit_falls_back_to_image(self):
+        now = time.time()
+        hc.ETC, hc.USR_ETC = self.p('etc'), self.p('usr', 'etc')
+        hc.usr_etc_changes = lambda old, new: None
+        hc.journal_greeter_uids = lambda lines=None: set()
+        hc.live_greeter_uids = lambda: set()
+        same, changed = os.path.join(hc.ETC, 'cacerts'), os.path.join(hc.ETC, 'shadow')
+        for root in (hc.ETC, hc.USR_ETC):
+            write(os.path.join(root, 'cacerts'), 'certs', 0o644)
+            write(os.path.join(root, 'shadow'), 'image', 0o600)
+        write(changed, 'edited', 0o600)
+        self.aide_setup({'changed': {same: 'f', changed: 'f'},
+                         'details': {same: {'sha512': {}, 'size': {}}}})
+        c = hc.check_aide(now, 'dep2')
+        self.assertIn('compared with /usr/etc', c.items[0])
+        self.assertEqual(c.summary.split(': ')[1], '1 other, 0 GDM greeter, 1 from the OS update')
+        self.assertIn('other ~ ' + changed, c.items)
+        self.assertIn('update ~ ' + same, c.items)
+        c = hc.check_aide(now, 'dep1')                    # same deployment: never
+        self.assertIn('2 other', c.summary)
+
+    def test_privileged_rules_from_the_sync(self):
+        now = time.time()
+        hc.journal_greeter_uids = lambda lines=None: set()
+        hc.live_greeter_uids = lambda: set()
+        hc.usr_etc_changes = lambda old, new: set()
+        hc.PRIV_RULES = self.p('55-privileged.rules')
+        hc.PRIV_OWNER = os.getuid()
+        rules = '## x\n-a always,exit -F arch=b64 -F path=/usr/bin/su -k privileged\n'
+        calls = []
+
+        def run(argv, timeout=120):
+            calls.append(argv)
+            return hc.subprocess.CompletedProcess(argv, 0, rules, '')
+        hc.run = run
+        write(hc.PRIV_RULES, rules, 0o640)
+        self.assertTrue(hc.priv_rules_explained())
+        self.assertEqual(calls[-1], [hc.PRIV_SYNC, '--print'])
+        self.aide_setup({'changed': {hc.PRIV_RULES: 'f'}})
+        self.assertIn('1 from the OS update', hc.check_aide(now, 'dep2').summary)
+        self.assertIn('1 other', hc.check_aide(now, 'dep1').summary)      # same deployment
+        write(hc.PRIV_RULES, rules + '# edited\n', 0o640)
+        self.assertFalse(hc.priv_rules_explained())                       # not the sync's
+        write(hc.PRIV_RULES, rules, 0o660)
+        self.assertFalse(hc.priv_rules_explained())                       # group writable
+        os.chmod(hc.PRIV_RULES, 0o640)
+        hc.PRIV_OWNER = os.getuid() + 1
+        self.assertFalse(hc.priv_rules_explained())                       # not root's
 
     # --- GDM greeter drop-ins (host 2026-11-24, admin 62 / 63) --------------------------
 

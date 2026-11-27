@@ -29,6 +29,7 @@ import glob
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -67,9 +68,21 @@ AUDITD_WANT = {"disk_error_action": "SYSLOG", "space_left_action": "SYSLOG",
 DEFAULT_ZONE = "drop"
 BPF_JIT_WANT = "2"
 # written again by every new deployment (inputs from the image): an update explains them
+# audit.rules (+ .prev): augenrules at the boot into a new deployment, after
+# audit-privileged-sync rewrote 55-privileged.rules (audit-loaded checks the loaded rules)
 GENERATED = ("/etc/ld.so.cache", "/etc/udev/hwdb.bin", "/etc/.updated",
-             "/etc/selinux/targeted/")
+             "/etc/selinux/targeted/", "/etc/audit/audit.rules", "/etc/audit/audit.rules.prev")
 UPDATE_TREES = ("/boot/ostree/", "/boot/loader")
+# old commit pruned (no ostree diff): an /etc file the same as the image's default
+# (/usr/etc of the booted deployment: content, type, mode, owner) came with the update;
+# not when aide saw its label / ACL / xattrs change (host 2026-11-27, admin 78)
+ETC = "/etc"
+USR_ETC = "/usr/etc"
+LABEL_ATTRS = {"selinux", "acl", "xattrs"}
+# setuid / setgid rules: audit-privileged-sync at the boot into a new deployment
+PRIV_RULES = "/etc/audit/rules.d/55-privileged.rules"
+PRIV_SYNC = "/usr/local/sbin/audit-privileged-sync"
+PRIV_OWNER = 0                   # owner of 55-privileged.rules (tests: their own uid)
 AUDIT_TOOLS = ("/usr/sbin/auditctl", "/usr/sbin/auditd", "/usr/sbin/ausearch",
                "/usr/sbin/aureport", "/usr/sbin/audispd", "/usr/sbin/augenrules")
 SAFE = re.compile(r"[^\x20-\x7e]")
@@ -193,6 +206,43 @@ def aide_entries(report: dict) -> list:
     return sorted(out, key=lambda e: e[1])
 
 
+def same_as_image(kind: str, path: str, attrs: set = frozenset()) -> bool:
+    """An /etc entry as the booted image's default (/usr/etc): same type, mode, owner,
+    content (link: target); removed: the image has none either. False when aide saw its
+    label / ACL / xattrs change, or anything is unreadable."""
+    if not path.startswith(ETC + "/") or attrs & LABEL_ATTRS:
+        return False
+    img = USR_ETC + path[len(ETC):]
+    if kind == "-":
+        return not os.path.lexists(path) and not os.path.lexists(img)
+    try:
+        a, b = os.lstat(path), os.lstat(img)
+        if (stat.S_IFMT(a.st_mode), stat.S_IMODE(a.st_mode), a.st_uid, a.st_gid) != \
+                (stat.S_IFMT(b.st_mode), stat.S_IMODE(b.st_mode), b.st_uid, b.st_gid):
+            return False
+        if stat.S_ISREG(a.st_mode):
+            return filecmp.cmp(path, img, shallow=False)
+        if stat.S_ISLNK(a.st_mode):
+            return os.readlink(path) == os.readlink(img)
+        return stat.S_ISDIR(a.st_mode)
+    except OSError:
+        return False
+
+
+def priv_rules_explained() -> bool:
+    """55-privileged.rules as audit-privileged-sync writes it for the booted image:
+    root-owned, not group / other writable, content = its --print."""
+    path = PRIV_RULES
+    try:
+        st = os.lstat(path)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != PRIV_OWNER or st.st_mode & 0o022:
+            return False
+        r = run([PRIV_SYNC, "--print"], timeout=300)
+        return r.returncode == 0 and r.stdout != "" and r.stdout == read(path)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def update_explained(path: str, etc_changes: set | None) -> bool:
     if path.startswith(UPDATE_TREES) or path in AUDIT_TOOLS:
         return True
@@ -289,21 +339,28 @@ def greeter_explained(kind: str, path: str, proven: set) -> bool:
     return greeter_file_ok(path, m.group(3)) if m.group(3) else greeter_dir_ok(path)
 
 
-def group_entries(entries: list, booted: str, notes: list = None) -> list:
+def group_entries(entries: list, booted: str, notes: list = None,
+                  details: dict = None) -> list:
     """[(group, kind, path)]: group update (an OS update since the last accept), greeter
-    (GDM login screen drop-ins), other. notes gets a line when ostree cannot tell."""
+    (GDM login screen drop-ins), other. notes gets a line when ostree cannot tell.
+    details: aide's json details (path -> changed attributes)."""
     acc, _ = read_accepted()
     new_deployment = bool(acc and booted and acc != booted)
+    details = details if isinstance(details, dict) else {}
     etc = set()
     if new_deployment:
         etc = usr_etc_changes(acc, booted)
         if etc is None and notes is not None:
             notes.append(f"note: ostree diff {acc[:10]}..{booted[:10]} not possible "
-                         "(old commit pruned): /etc changes not grouped")
+                         "(old commit pruned): /etc changes compared with /usr/etc instead")
     proven = None
     out = []
     for kind, path in entries:
-        if new_deployment and update_explained(path, etc):
+        attrs = details.get(path)
+        attrs = set(attrs) if isinstance(attrs, dict) else set()
+        if new_deployment and (update_explained(path, etc)
+                               or (etc is None and same_as_image(kind, path, attrs))
+                               or (path == PRIV_RULES and kind == "~" and priv_rules_explained())):
             out.append(("update", kind, path))
             continue
         if greeter_uid(path) is not None:
@@ -347,7 +404,7 @@ def check_aide(now: float, booted: str) -> Check:
     if not entries:
         return c.set("pass", f"{total} entries, no change{since}")
     notes = []
-    grouped = group_entries(entries, booted, notes)
+    grouped = group_entries(entries, booted, notes, report.get("details"))
     for n in notes:
         c.item(n)
     count = {g: sum(1 for e in grouped if e[0] == g) for g in ("other", "greeter", "update")}
@@ -902,7 +959,7 @@ def do_accept() -> int:
     booted, _ = booted_deployment()
     acc, acc_time = read_accepted()
     notes = []
-    grouped = group_entries(aide_entries(report), booted, notes)
+    grouped = group_entries(aide_entries(report), booted, notes, report.get("details"))
     db_sha = sha256_file(AIDE_NEW)
     stamp = datetime.datetime.now().astimezone()
     head = [f"harden-check --accept  {stamp.isoformat(timespec='seconds')}",
@@ -983,7 +1040,7 @@ def do_list() -> int:
         return 1
     booted, _ = booted_deployment()
     notes = []
-    grouped = group_entries(aide_entries(report), booted, notes)
+    grouped = group_entries(aide_entries(report), booted, notes, report.get("details"))
     for n in notes:
         print(f"# {n}")
     for g, kind, path in grouped:
