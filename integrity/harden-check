@@ -5,9 +5,13 @@ Installed root-owned in /usr/local/sbin by harden-workstation.sh integrity. Neve
 
   harden-check            the checks below -> RESULT (aidecheck.service, after aide --check)
   harden-check --init     first AIDE database (the section, when there is none)
-  harden-check --accept   admin, text console: aide --update, shows every change, y = the
-                          new database is the baseline (only the admin accepts: the daily
-                          user can never take a change in by itself)
+  harden-check --accept   admin, text console: aide --update, then counts per group on
+                          the screen, the "other" (not explained) changes numbered page by
+                          page, and the full numbered list in a file the daily user can
+                          read (/tmp/from-admin, names only); typing the code at the top
+                          of that list takes exactly that database as the new baseline
+                          (only the admin accepts: the daily user can never take a change
+                          in by itself)
   harden-check --list     every change of the last aide report, one per line: group, kind,
                           path (admin scripts explain the "other" ones before an accept)
 
@@ -90,6 +94,18 @@ GREETER_JOURNAL = ["journalctl", "-q", "--no-pager", "-o", "json", "--since=-30d
 UNIT_PROPS = ("IPAddressDeny=any", "UMask=0077",
               "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER "
               "CAP_CHOWN CAP_AUDIT_CONTROL CAP_SYS_ADMIN")
+# --accept (decision 2026-11-25: a long list cannot be scrolled on the text console)
+OUTBOX = "/tmp/from-admin"       # one way, admin -> daily user (as tools/admin-run.sh)
+ACCEPTS = STATE + "/accepts"     # the lists taken in, root only, newest KEEP_ACCEPTS kept
+KEEP_ACCEPTS = 20
+CODE_LEN = 8                     # first characters of the list's sha256 (as admin-run.sh)
+CODE_TRIES = 3
+TICK = 15                        # seconds between "still running" lines of aide --update
+AIDECHECK = "aidecheck.service"
+GROUPS = (("other", "not explained, read each one"),
+          ("greeter", "GDM login screen drop-ins"),
+          ("update", "from the OS update since the last accept"))
+ATTR = re.compile(r"[a-z0-9_]{1,20}")
 
 
 def clean(s: str) -> str:
@@ -654,14 +670,18 @@ def write_accepted() -> None:
     os.replace(tmp, ACCEPTED)
 
 
-def aide_as_unit(cmd: str) -> int:
-    """aide --init / --update in a transient service like aidecheck.service; its report
-    goes to this terminal. -> aide's exit status."""
+def unit_argv(cmd: str) -> list:
+    """aide <cmd> in a transient service like aidecheck.service."""
     argv = ["systemd-run", "--wait", "--pipe", "--quiet", "--collect",
             "--unit=aidecheck-" + cmd.strip("-")]
     for p in UNIT_PROPS:
         argv += ["-p", p]
-    return subprocess.run(argv + [AIDE, cmd, "-c", AIDE_CONF]).returncode
+    return argv + [AIDE, cmd, "-c", AIDE_CONF]
+
+
+def aide_as_unit(cmd: str) -> int:
+    """aide --init; its report goes to this terminal. -> aide's exit status."""
+    return subprocess.run(unit_argv(cmd)).returncode
 
 
 def do_init() -> int:
@@ -678,7 +698,9 @@ def do_init() -> int:
     return 0
 
 
-def ask(prompt: str) -> bool:
+def ask_line(prompt: str) -> str | None:
+    """One line typed on the terminal (lower case, trimmed); None without a terminal
+    or at its end (Ctrl+D)."""
     try:
         with open("/dev/tty") as tty:
             # keys typed earlier must not answer (admin scripts 40 / 42)
@@ -686,34 +708,262 @@ def ask(prompt: str) -> bool:
             termios.tcflush(tty, termios.TCIFLUSH)
             # a whole line: an admin script's output filter (sed -u) passes lines only
             print(prompt, flush=True)
-            return tty.readline().strip().lower() == "y"
+            line = tty.readline()
+            return line.strip().lower() if line else None
     except OSError:
-        return False
+        return None
+
+
+def aidecheck_state() -> tuple:
+    """(ActiveState, start time) of aidecheck.service: a daily check running during
+    --accept would write aide.json too."""
+    try:
+        r = run(["systemctl", "show", AIDECHECK, "-p", "ActiveState",
+                 "-p", "ExecMainStartTimestampMonotonic"])
+    except (OSError, subprocess.TimeoutExpired):
+        return "", ""
+    kv = dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line)
+    return kv.get("ActiveState", ""), kv.get("ExecMainStartTimestampMonotonic", "")
+
+
+def aide_update_quiet() -> int:
+    """aide --update like aide_as_unit, its long plain report not on the screen (the
+    json report has it); a line every TICK seconds. -> aide's exit status."""
+    t0 = time.monotonic()
+    p = subprocess.Popen(unit_argv("--update"), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    while True:
+        try:
+            return p.wait(timeout=TICK)
+        except subprocess.TimeoutExpired:
+            print(f"  ... {int(time.monotonic() - t0)} s", flush=True)
+
+
+def sha256_file(path: str) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def hide_admin(text: str, name: str = None) -> str:
+    """The admin account's name -> <admin> (a list may be uploaded: no admin name)."""
+    name = os.environ.get("SUDO_USER", "") if name is None else name
+    if not name or name == "root" or not re.fullmatch(r"[a-z_][a-z0-9_.-]*\$?", name):
+        return text
+    return re.sub(r"(?<![A-Za-z0-9_.-])" + re.escape(name) + r"(?![A-Za-z0-9_.-])", "<admin>", text)
+
+
+def changed_attrs(report: dict, path: str) -> str:
+    """Names of the attributes aide saw change (json details), no values."""
+    d = report.get("details")
+    d = d.get(path) if isinstance(d, dict) else None
+    if not isinstance(d, dict):
+        return ""
+    names = sorted(k for k in d if isinstance(k, str) and ATTR.fullmatch(k))
+    return "changed: " + " ".join(names) if names else ""
+
+
+def build_list(grouped: list, report: dict, db_sha: str, head: list) -> tuple:
+    """(list text, code, numbered other lines). Numbered over all groups, "other"
+    first; the code = the first CODE_LEN characters of the sha256 of every line but
+    the code line itself (head, counts, the new database's sha256, the items)."""
+    import hashlib
+    count = {g: sum(1 for e in grouped if e[0] == g) for g, _ in GROUPS}
+    lines = list(head)
+    lines += [f"database: {os.path.basename(AIDE_NEW)} sha256 {db_sha}",
+              "local only: may hold wifi profile names, do not upload",
+              "",
+              f"changes: {len(grouped)}   " + " | ".join(f"{g} {count[g]}" for g, _ in GROUPS),
+              "kind: + added   - removed   ~ changed"]
+    width = len(str(max(len(grouped), 1)))
+    other = []
+    n = 0
+    for group, what in GROUPS:
+        lines += ["", f"== {group} ({count[group]}): {what}"]
+        for g, kind, path in grouped:
+            if g != group:
+                continue
+            n += 1
+            attrs = changed_attrs(report, path) if kind == "~" else ""
+            line = f"{n:>{width}}  {kind} {hide_admin(clean(path))}"
+            line += f"   {attrs}" if attrs else ""
+            lines.append(line)
+            if group == "other":
+                other.append(line)
+        if not count[group]:
+            lines.append("  (none)")
+    body = "\n".join(lines) + "\n"
+    code = hashlib.sha256(body.encode()).hexdigest()[:CODE_LEN]
+    text = (lines[0] + "\n" + f"code: {code}   (type it on the text console to accept "
+            "exactly this list)\n" + "\n".join(lines[1:]) + "\n")
+    return text, code, other
+
+
+def outbox_owner() -> int:
+    v = os.environ.get("SUDO_UID", "")
+    return int(v) if v.isdigit() else 0
+
+
+def write_outbox(name: str, text: str, path: str = None, owner: int = None) -> str:
+    """The list for the daily user: OUTBOX made by the admin (tools/admin-run.sh) or here
+    for him; refused if anybody else owns it, it is a link, or group / others may write
+    in it. The file: new, root-owned, 0644. -> its path; OSError / ValueError = why not."""
+    path = OUTBOX if path is None else path
+    owner = outbox_owner() if owner is None else owner
+    try:
+        os.mkdir(path, 0o700)
+        made = True
+    except FileExistsError:
+        made = False
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        if made:
+            os.fchown(fd, owner, -1)
+            os.fchmod(fd, 0o755)
+        st = os.fstat(fd)
+        if st.st_uid not in (owner, 0) or st.st_mode & 0o022:
+            raise ValueError(f"{path} is not the admin's (owner uid {st.st_uid}, "
+                             f"mode {st.st_mode & 0o777:o})")
+        f = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+        with os.fdopen(f, "w") as out:
+            out.write(text)
+            os.fchmod(out.fileno(), 0o644)
+    finally:
+        os.close(fd)
+    return os.path.join(path, name)
+
+
+def keep_record(name: str, text: str, path: str = None) -> None:
+    """The accepted list in ACCEPTS (0700 root, files 0600), newest KEEP_ACCEPTS kept."""
+    path = ACCEPTS if path is None else path
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+    fd = os.open(os.path.join(path, name), flags, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    old = sorted(n for n in os.listdir(path) if n.startswith("aide-accept-"))
+    for n in old[:-KEEP_ACCEPTS]:
+        os.unlink(os.path.join(path, n))
+
+
+def page(text: str) -> None:
+    """Page by page on the terminal (less in secure mode: no shell, no files, no
+    history); printed as it is without a terminal."""
+    if not sys.stdout.isatty():
+        print(text, end="")
+        return
+    env = {"PATH": os.environ["PATH"], "LC_ALL": "C", "LESSSECURE": "1", "LESSHISTFILE": "-",
+           "TERM": os.environ.get("TERM") or "linux"}
+    try:
+        subprocess.run(["less", "-K", "-Psspace next page   b back   q done"],
+                       input=text, text=True, env=env)
+    except OSError:
+        print(text, end="")
+
+
+def start_check() -> None:
+    subprocess.run(["systemctl", "start", AIDECHECK])
+
+
+def refuse(msg: str) -> int:
+    if os.path.exists(AIDE_NEW):
+        os.unlink(AIDE_NEW)
+    print(msg)
+    print("not accepted: the database is unchanged")
+    return 1
 
 
 def do_accept() -> int:
     if not os.path.exists(AIDE_DB):
         print("no database: sudo ./harden-workstation.sh integrity builds the first one")
         return 1
-    print("aide --update: the changes since the last accept (also written to the new database)")
-    rc = aide_as_unit("--update")
+    state, started = aidecheck_state()
+    if state in ("activating", "active", "deactivating", "reloading"):
+        print(f"the daily check is running now ({AIDECHECK}): wait for it "
+              f"(systemctl status {AIDECHECK}), then run again")
+        return 1
+    t0 = time.time()
+    print("aide --update: reads every file in the scope (about a minute) ...", flush=True)
+    rc = aide_update_quiet()
+    took = int(time.time() - t0)
     if rc > 7 or not os.path.exists(AIDE_NEW):
-        print(f"aide --update failed (exit {rc}): nothing accepted")
-        if os.path.exists(AIDE_NEW):
-            os.unlink(AIDE_NEW)
-        return 1
-    if rc == 0:
-        print("no change since the last accept")
-    if not ask("take these as the new baseline? [y/N]"):
-        os.unlink(AIDE_NEW)
-        print("not accepted: the database is unchanged")
-        return 1
+        return refuse(f"aide --update failed (exit {rc}, {took} s)")
+    if aidecheck_state()[1] != started:
+        return refuse(f"the daily check ({AIDECHECK}) ran at the same time and wrote the "
+                      "report too: run again")
+    try:
+        if os.stat(AIDE_JSON).st_mtime < t0 - 1:
+            return refuse(f"{AIDE_JSON} is not from this run: run again")
+        report = json.loads(read(AIDE_JSON))
+    except (OSError, ValueError) as e:
+        return refuse(f"{AIDE_JSON}: {e}")
+    booted, _ = booted_deployment()
+    acc, acc_time = read_accepted()
+    notes = []
+    grouped = group_entries(aide_entries(report), booted, notes)
+    db_sha = sha256_file(AIDE_NEW)
+    stamp = datetime.datetime.now().astimezone()
+    head = [f"harden-check --accept  {stamp.isoformat(timespec='seconds')}",
+            f"last accept: {acc_time or 'none'}; deployment: "
+            + ("new (an OS update since the last accept)" if acc and booted and acc != booted
+               else "the same")] + notes
+    text, code, other = build_list(grouped, report, db_sha, head)
+    name = f"aide-accept-{stamp:%Y%m%d-%H%M%S}.txt"
+    count = {g: sum(1 for e in grouped if e[0] == g) for g, _ in GROUPS}
+    print(f"aide --update done ({took} s): {len(grouped)} changes since the last accept"
+          + (f" ({acc_time})" if acc_time else ""))
+    for g, what in GROUPS:
+        print(f"  {g:<8} {count[g]:>5}  {what}")
+    for n in notes:
+        print(f"  {n}")
+    try:
+        listed = write_outbox(name, text)
+    except (OSError, ValueError) as e:
+        listed = ""
+        print(f"list for the daily user NOT written: {clean(e)}")
+    if listed:
+        print(f"list for the daily user (GNOME): {listed}")
+        print(f"  all {len(grouped)} numbered; the code to accept is at its top")
+        if other:
+            ask_line(f"Enter = the {len(other)} other items here, page by page "
+                     "(space next page, b back, q done)")
+            page(f"other (not explained): {len(other)} of {len(grouped)}, "
+                 "numbers as in the list\n\n" + "\n".join(other) + "\n")
+        else:
+            print("  other: none (every change explained)")
+    else:
+        ask_line("Enter = the whole list here, page by page (space next page, b back, q done; "
+                 "the code is at its top)")
+        page(text)
+    tries = 0
+    while True:
+        a = ask_line(f"accept? type the {CODE_LEN}-character code from the top of the list "
+                     "(0 = no)")
+        if a is None or a in ("0", "n", "no"):
+            return refuse("answer: no")
+        if a == code:
+            break
+        if a == "":
+            continue                    # Enter alone: asked again, not counted
+        tries += 1
+        print(f"not the code of this list (try {tries} of {CODE_TRIES})")
+        if tries >= CODE_TRIES:
+            return refuse("no matching code")
+    if not os.path.exists(AIDE_NEW) or sha256_file(AIDE_NEW) != db_sha:
+        return refuse(f"{AIDE_NEW} changed while you read the list (another accept?): run again")
     if os.path.exists(AIDE_DB):
         os.replace(AIDE_DB, AIDE_DB + ".prev")
     os.replace(AIDE_NEW, AIDE_DB)
     write_accepted()
-    print(f"accepted: {AIDE_DB} (previous: {AIDE_DB}.prev). Check again:")
-    subprocess.run(["systemctl", "start", "aidecheck.service"])
+    try:
+        keep_record(name, text)
+    except OSError as e:
+        print(f"record of the list not kept: {e.strerror}")
+    print(f"accepted ({code}): {AIDE_DB} (previous: {AIDE_DB}.prev; list kept in {ACCEPTS}). "
+          "Check again (about a minute) ...", flush=True)
+    start_check()
     try:
         for line in read(RESULT).splitlines():
             if line.startswith("check\t"):

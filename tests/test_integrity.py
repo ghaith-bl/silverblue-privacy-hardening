@@ -498,5 +498,231 @@ class Tool(unittest.TestCase):
         self.assertEqual([f for f in os.listdir(self.d) if f.startswith('.result')], [])
 
 
+class Accept(unittest.TestCase):
+    """--accept (decision 2026-11-25): counts on the screen, the other items paged, the
+    numbered list for the daily user, the code binds the accept to that list + database."""
+    FNS = ('aidecheck_state', 'aide_update_quiet', 'ask_line', 'page', 'start_check',
+           'booted_deployment', 'journal_greeter_uids', 'live_greeter_uids', 'usr_etc_changes')
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.d = self.dir.name
+        self.saved = {k: getattr(hc, k) for k in dir(hc) if k.isupper()}
+        self.saved_fn = {k: getattr(hc, k) for k in self.FNS}
+        self.env = {k: os.environ.get(k) for k in ('SUDO_USER', 'SUDO_UID')}
+        for k in self.env:
+            os.environ.pop(k, None)
+        hc.STATE = self.p('state')
+        os.makedirs(hc.STATE)
+        hc.ACCEPTED = self.p('state', 'accepted')
+        hc.ACCEPTS = self.p('state', 'accepts')
+        hc.RESULT = self.p('state', 'result')
+        hc.AIDE_DB = self.p('aide.db.gz')
+        hc.AIDE_NEW = self.p('aide.db.new.gz')
+        hc.AIDE_JSON = self.p('aide.json')
+        hc.OUTBOX = self.p('from-admin')
+        write(hc.AIDE_DB, 'old db')
+        write(hc.ACCEPTED, 'dep1 2026-11-25T18:40+03:00\n')
+        write(hc.RESULT, 'check\taide\tpass\tno change\n')
+        hc.booted_deployment = lambda cmdline=None: ('dep1', '')
+        hc.journal_greeter_uids = lambda lines=None: set()
+        hc.live_greeter_uids = lambda: set()
+        hc.aidecheck_state = lambda: ('inactive', '500')
+        hc.start_check = lambda: None
+        self.report = {'changed': {'/etc/shadow': 'f', '/var/spool/cron/gtx': 'f'},
+                       'added': {'/var/usrlocal/sbin/harden-ids': 'f'},
+                       'details': {'/etc/shadow': {'sha512': {'old': 'a', 'new': 'b'},
+                                                   'size': {'old': 1, 'new': 2}}}}
+        self.updates = 0
+
+        def update():
+            self.updates += 1
+            write(hc.AIDE_NEW, 'new db')
+            write(hc.AIDE_JSON, json.dumps(self.report))
+            return 5
+        hc.aide_update_quiet = update
+        self.pages = []
+        hc.page = lambda text: self.pages.append(text)
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(hc, k, v)
+        for k, v in self.saved_fn.items():
+            setattr(hc, k, v)
+        for k, v in self.env.items():
+            if v is not None:
+                os.environ[k] = v
+        self.dir.cleanup()
+
+    def p(self, *parts):
+        return os.path.join(self.d, *parts)
+
+    def listed(self):
+        names = os.listdir(hc.OUTBOX)
+        self.assertEqual(len(names), 1)
+        return read(os.path.join(hc.OUTBOX, names[0]))
+
+    def answers(self, *answers):
+        """ask_line: Enter for the paging question; each "CODE" = the code of the list."""
+        it = iter(answers)
+
+        def ask(prompt):
+            if not prompt.startswith('accept?'):
+                return ''
+            a = next(it)
+            if a == 'CODE':
+                text = self.listed() if os.path.isdir(hc.OUTBOX) else self.pages[-1]
+                a = re.search(r'^code: ([0-9a-f]{8}) ', text, re.M).group(1)
+            return a
+        hc.ask_line = ask
+
+    def accept(self):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = hc.do_accept()
+        return rc, buf.getvalue()
+
+    def test_build_list(self):
+        grouped = [('update', '~', '/etc/ld.so.cache'), ('other', '~', '/etc/shadow'),
+                   ('other', '+', '/var/spool/cron/gtx')]
+        os.environ['SUDO_USER'] = 'gtx'
+        text, code, other = hc.build_list(grouped, self.report, 'f' * 64, ['head line'])
+        lines = text.splitlines()
+        self.assertEqual(lines[0], 'head line')
+        self.assertTrue(lines[1].startswith(f'code: {code}   '))
+        import hashlib
+        rest = '\n'.join([lines[0]] + lines[2:]) + '\n'
+        self.assertEqual(code, hashlib.sha256(rest.encode()).hexdigest()[:hc.CODE_LEN])
+        self.assertIn('changes: 3   other 2 | greeter 0 | update 1', text)
+        # numbered over all groups, other first; attribute names only; no admin name
+        self.assertEqual(other, ['1  ~ /etc/shadow   changed: sha512 size',
+                                 '2  + /var/spool/cron/<admin>'])
+        self.assertIn('3  ~ /etc/ld.so.cache', text)
+        self.assertIn('== greeter (0): GDM login screen drop-ins\n  (none)', text)
+        self.assertNotIn('gtx', text)
+        self.assertNotIn("'old'", text)
+        self.assertTrue(text.isascii())
+        # another database or another list: another code
+        self.assertNotEqual(hc.build_list(grouped, self.report, 'e' * 64, ['head line'])[1], code)
+        self.assertNotEqual(hc.build_list(grouped[:2], self.report, 'f' * 64, ['head line'])[1], code)
+        self.assertEqual(hc.build_list(grouped, self.report, 'f' * 64, ['head line'])[1], code)
+
+    def test_hide_admin(self):
+        self.assertEqual(hc.hide_admin('/var/spool/cron/gtx gtxy xgtx gtx.', 'gtx'),
+                         '/var/spool/cron/<admin> gtxy xgtx gtx.')
+        self.assertEqual(hc.hide_admin('/var/spool/cron/root', 'root'), '/var/spool/cron/root')
+        self.assertEqual(hc.hide_admin('/a/x', ''), '/a/x')
+        self.assertEqual(hc.hide_admin('/a/.*', '.*'), '/a/.*')        # not a user name
+
+    def test_write_outbox(self):
+        me = os.getuid()
+        path = hc.write_outbox('a.txt', 'list\n', owner=me)
+        self.assertEqual(path, os.path.join(hc.OUTBOX, 'a.txt'))
+        self.assertEqual(read(path), 'list\n')
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o644)
+        st = os.stat(hc.OUTBOX)
+        self.assertEqual((st.st_uid, st.st_mode & 0o777), (me, 0o755))
+        with self.assertRaises(FileExistsError):                       # never over a file
+            hc.write_outbox('a.txt', 'x\n', owner=me)
+        if me != 0:                                                    # root's is allowed
+            with self.assertRaises(ValueError):                        # someone else's
+                hc.write_outbox('b.txt', 'x\n', owner=me + 1)
+        os.chmod(hc.OUTBOX, 0o775)
+        with self.assertRaises(ValueError):                            # group may write
+            hc.write_outbox('c.txt', 'x\n', owner=me)
+        link = self.p('link')
+        os.symlink(hc.OUTBOX, link)
+        with self.assertRaises(OSError):                               # a link
+            hc.write_outbox('d.txt', 'x\n', path=link, owner=me)
+
+    def test_keep_record(self):
+        hc.KEEP_ACCEPTS = 3
+        for i in range(5):
+            hc.keep_record(f'aide-accept-2026112{i}-000000.txt', f'{i}\n')
+        names = sorted(os.listdir(hc.ACCEPTS))
+        self.assertEqual(names, [f'aide-accept-2026112{i}-000000.txt' for i in (2, 3, 4)])
+        self.assertEqual(os.stat(os.path.join(hc.ACCEPTS, names[0])).st_mode & 0o777, 0o600)
+
+    def test_accept_with_the_code(self):
+        os.environ['SUDO_UID'] = str(os.getuid())
+        os.environ['SUDO_USER'] = 'gtx'
+        self.answers('', 'CODE')                    # Enter alone: asked again
+        rc, out = self.accept()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(read(hc.AIDE_DB), 'new db')
+        self.assertEqual(read(hc.AIDE_DB + '.prev'), 'old db')
+        self.assertFalse(os.path.exists(hc.AIDE_NEW))
+        self.assertIn('3 changes since the last accept (2026-11-25T18:40+03:00)', out)
+        self.assertRegex(out, r'other +3 +not explained')
+        text = self.listed()
+        self.assertNotIn('gtx', text + out)
+        self.assertIn('deployment: the same', text)
+        # the other items paged on the screen, numbered as in the list
+        self.assertEqual(len(self.pages), 1)
+        self.assertIn('1  ~ /etc/shadow   changed: sha512 size', self.pages[0])
+        self.assertIn('1  ~ /etc/shadow', text)
+        kept = os.listdir(hc.ACCEPTS)
+        self.assertEqual(read(os.path.join(hc.ACCEPTS, kept[0])), text)
+        self.assertTrue(read(hc.ACCEPTED).startswith('dep1 '))
+
+    def test_accept_wrong_code_or_no(self):
+        os.environ['SUDO_UID'] = str(os.getuid())
+        self.answers('12345678', 'abcdefab', 'ffffffff')
+        rc, out = self.accept()
+        self.assertEqual(rc, 1)
+        self.assertIn('try 3 of 3', out)
+        self.assertEqual(read(hc.AIDE_DB), 'old db')
+        self.assertFalse(os.path.exists(hc.AIDE_NEW))
+        self.assertFalse(os.path.exists(hc.ACCEPTS))
+        for no in ('0', None):
+            self.answers(no)
+            self.assertEqual(self.accept()[0], 1)
+            self.assertEqual(read(hc.AIDE_DB), 'old db')
+
+    def test_accept_list_not_written(self):
+        write(hc.OUTBOX, 'a file, not a folder')
+        self.answers('CODE')                         # read from the page of the whole list
+        rc, out = self.accept()
+        self.assertEqual(rc, 0, out)
+        self.assertIn('NOT written', out)
+        self.assertIn('== update (', self.pages[0])
+
+    def test_accept_refusals(self):
+        os.environ['SUDO_UID'] = str(os.getuid())
+        # the daily check is running: aide is not started
+        hc.aidecheck_state = lambda: ('activating', '500')
+        rc, out = self.accept()
+        self.assertEqual((rc, self.updates), (1, 0))
+        self.assertIn('running now', out)
+        # the daily check ran during the update: its report may be the one read
+        states = iter([('inactive', '500'), ('inactive', '900')])
+        hc.aidecheck_state = lambda: next(states)
+        rc, out = self.accept()
+        self.assertEqual(rc, 1)
+        self.assertIn('ran at the same time', out)
+        self.assertFalse(os.path.exists(hc.AIDE_NEW))
+        # the new database changed while the list was read
+        hc.aidecheck_state = lambda: ('inactive', '500')
+        self.answers('CODE')
+        ask = hc.ask_line
+
+        def ask_and_change(prompt):
+            a = ask(prompt)
+            if prompt.startswith('accept?'):
+                write(hc.AIDE_NEW, 'another db')
+            return a
+        hc.ask_line = ask_and_change
+        rc, out = self.accept()
+        self.assertEqual(rc, 1)
+        self.assertIn('changed while you read', out)
+        self.assertEqual(read(hc.AIDE_DB), 'old db')
+        # aide failed
+        hc.aide_update_quiet = lambda: 17
+        rc, out = self.accept()
+        self.assertIn('aide --update failed (exit 17', out)
+
+
 if __name__ == '__main__':
     unittest.main()
