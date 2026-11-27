@@ -141,6 +141,72 @@ class NetPart(unittest.TestCase):
             self.assertEqual(oct(os.stat(p).st_mode & 0o777), '0o640')
             self.assertEqual(os.listdir(d), ['net.yaml'])
 
+    def test_written_file_gets_the_policy_label(self):
+        """restorecon -F after each write (sudo leaves unconfined_u, services system_u:
+        AIDE compares the whole label); not when unchanged, not without SELinux."""
+        with tempfile.TemporaryDirectory() as d:
+            calls = os.path.join(d, 'calls')
+            fake = os.path.join(d, 'restorecon')
+            with open(fake, 'w') as f:
+                f.write('#!/bin/sh\necho "$@" >> %s\n' % calls)
+            os.chmod(fake, 0o755)
+            enforce = os.path.join(d, 'enforce')
+            p = os.path.join(d, 'net.yaml')
+            saved = HI.RESTORECON, HI.SELINUX_ENFORCE, os.chown
+            HI.RESTORECON, HI.SELINUX_ENFORCE = fake, enforce
+            if os.geteuid() != 0:
+                os.chown = lambda *a: None
+            try:
+                self.assertTrue(HI.write_if_changed(p, 'a\n'))      # no SELinux: no call
+                self.assertFalse(os.path.exists(calls))
+                open(enforce, 'w').close()
+                self.assertTrue(HI.write_if_changed(p, 'b\n'))
+                self.assertFalse(HI.write_if_changed(p, 'b\n'))     # unchanged: no call
+                with open(calls) as f:
+                    self.assertEqual(f.read(), '-F %s\n' % p)
+                with open(fake, 'w') as f:
+                    f.write('#!/bin/sh\necho denied >&2\nexit 1\n')
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertTrue(HI.write_if_changed(p, 'c\n'))  # fails: a warning only
+                self.assertIn('WARNING: restorecon %s: exit 1 denied' % p, out.getvalue())
+            finally:
+                HI.RESTORECON, HI.SELINUX_ENFORCE, os.chown = saved
+
+    def sync(self, changed, active, watch=True, enabled=True):
+        """cmd_sync with a made-up network: (exit code, systemctl actions, output)."""
+        state = HI.gather(ROUTES, LINKS, NAMES, CONF, []) if watch else \
+            HI.gather([], [], [], {'vm_bridges': [], 'browse_net': ''}, [])
+        acts = []
+
+        def systemctl(*args):
+            if args[0] in ('is-enabled', 'is-active'):
+                ok = enabled if args[0] == 'is-enabled' else active
+                return subprocess.CompletedProcess(args, 0 if ok else 3, '', '')
+            acts.append(args[0])
+            return subprocess.CompletedProcess(args, 0, '', '')
+        saved = HI.read_conf, HI.current, HI.write_if_changed, HI.systemctl
+        HI.read_conf, HI.current = (lambda: CONF), (lambda conf: state)
+        HI.write_if_changed, HI.systemctl = (lambda p, t: changed), systemctl
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                rc = HI.cmd_sync(['sync'])
+        finally:
+            HI.read_conf, HI.current, HI.write_if_changed, HI.systemctl = saved
+        return rc, acts, out.getvalue()
+
+    def test_sync_offline_stops_not_restarts(self):
+        rc, acts, out = self.sync(changed=True, active=True, watch=False)
+        self.assertEqual((rc, acts), (1, ['stop']))
+        self.assertIn('suricata.service stopped', out)
+        self.assertNotIn('restarted', out)
+        self.assertEqual(self.sync(changed=False, active=False, watch=False)[:2], (1, []))
+        self.assertEqual(self.sync(changed=True, active=True)[:2], (0, ['restart']))
+        self.assertEqual(self.sync(changed=False, active=False)[:2], (0, ['start']))
+        self.assertEqual(self.sync(changed=False, active=True)[:2], (0, []))
+        self.assertEqual(self.sync(changed=True, active=True, enabled=False)[:2], (0, []))
+
 
 class LocalRules(unittest.TestCase):
     def rules(self):

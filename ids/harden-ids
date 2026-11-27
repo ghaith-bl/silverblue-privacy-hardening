@@ -38,6 +38,8 @@ EVE = '/var/log/suricata/harden-ids/eve.json'
 UNIT = 'suricata.service'
 IP = '/usr/sbin/ip'
 SYSTEMCTL = '/usr/bin/systemctl'
+RESTORECON = '/usr/sbin/restorecon'
+SELINUX_ENFORCE = '/sys/fs/selinux/enforce'
 
 # a group nothing on a watched interface has: inside PRIVATE_NET (a rule may cut it out of
 # that group), reserved (never a host's address)
@@ -234,6 +236,22 @@ def current(conf):
 
 # ---------------------------------------------------------------- sync
 
+def relabel(path):
+    """SELinux label of path = the policy's default, user part included (restorecon -F).
+    net.yaml is written by sudo (section ids: unconfined_u) and by services (dispatcher,
+    harden-ids-sync, suricata's ExecCondition: system_u); AIDE compares the whole label
+    (2026-11-25: one Wi-Fi change = an AIDE fail). No SELinux / no restorecon: nothing."""
+    if not (os.path.exists(SELINUX_ENFORCE) and os.access(RESTORECON, os.X_OK)):
+        return
+    try:
+        r = subprocess.run([RESTORECON, '-F', path], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as e:
+        say('WARNING: restorecon %s: %s' % (path, e))
+        return
+    if r.returncode != 0:
+        say('WARNING: restorecon %s: exit %d %s' % (path, r.returncode, r.stderr.strip()[:200]))
+
+
 def write_if_changed(path, text):
     try:
         with open(path) as f:
@@ -259,6 +277,7 @@ def write_if_changed(path, text):
         except FileNotFoundError:
             pass
         raise
+    relabel(path)
     return True
 
 
@@ -305,15 +324,17 @@ def cmd_sync(argv):
         active = systemctl('is-active', '--quiet', UNIT).returncode == 0
         if not enabled:
             say('%s not enabled: no restart' % UNIT)
+        elif not watch:
+            # offline: stop, not restart (2026-11-24: a restart its ExecCondition then skipped)
+            if active:
+                systemctl('stop', '--no-block', UNIT)
+                say('%s stopped' % UNIT)
         elif changed and active:
             systemctl('restart', '--no-block', UNIT)
             say('%s restarted (network changed)' % UNIT)
-        elif not active and watch:
+        elif not active:
             systemctl('start', '--no-block', UNIT)
             say('%s started' % UNIT)
-        elif changed and not watch:
-            systemctl('stop', '--no-block', UNIT)
-            say('%s stopped' % UNIT)
     return 0 if watch else 1
 
 

@@ -2704,6 +2704,9 @@ sec_ids() {
   f=$(cat "$dst/net.yaml" 2>/dev/null || true)
   rc=0; "$tool" sync --no-restart || rc=$?
   (( rc <= 1 )) || die "harden-ids sync failed (exit $rc)"
+  # the policy's label, user part too: an older harden-ids left unconfined_u (sudo) here,
+  # services write system_u, AIDE compares the whole label (2026-11-25)
+  restorecon -F "$dst/net.yaml" 2>/dev/null || true
   # a new network part needs a restart too (not a change of this machine's config)
   [[ $f == "$(cat "$dst/net.yaml")" ]] || c1=$((c1 + 1))
   tmp=$(mktemp -d)
