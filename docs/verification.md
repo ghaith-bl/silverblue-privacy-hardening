@@ -71,7 +71,8 @@ is locked, so `NET_FLOWS_DIR=~/admin-inbox/net-flows` there (default `~/net-flow
 | last run | `systemctl show -p Result aidecheck.service`; `sudo cat /var/lib/harden-check/result` | `success`; every `check` line `pass` after an accept |
 | result mode | `stat -c '%a %U:%G' /var/lib/harden-check /var/lib/harden-check/result` | `750 root:sectop`, `640 root:sectop` |
 | a change shows | `sudo touch /etc/harden-test && sudo systemctl start aidecheck.service` | sectop `harden-check` yellow, item `other + /etc/harden-test`; then `sudo rm /etc/harden-test`, start again: green |
-| accept | `sudo harden-check --accept` | lists the changes, `y` = new baseline, check again |
+| accept | `sudo harden-check --accept` (text console) | counts per group (other / greeter / update), the `other` items numbered page by page (`less`, no shell escape), the full numbered list in `/tmp/from-admin/aide-accept-<time>.txt` (0644 root, readable by the daily user); wrong code 3 times or `0` = nothing taken; the right code = new baseline, list kept in `/var/lib/harden-check/accepts/` (0600, last 20), check again |
+| accept binds | change `aide.db.new.gz` while the code question waits (a second accept) | "changed while you read the list", nothing taken |
 | change groups | `sudo harden-check --list` | one line per change: `update` / `greeter` / `other`, kind, path; after a log out / in: `greeter + /etc/systemd/system.control/user-<uid>.slice.d` (uid 60578-60705), its `50-*.conf` files |
 | scanner | OpenSCAP `package_aide_installed`, `aide_build_database`, `aide_check_audit_tools` | pass (`aide_periodic_cron_checking`: false positive row) |
 

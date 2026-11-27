@@ -164,8 +164,10 @@ sudo rpm-ostree install suricata nmap && systemctl reboot
 sudo ./harden-workstation.sh ids      # Suricata IDS: first ET Open download (tunnel), start
 sudo rpm-ostree install aide && systemctl reboot
 sudo ./harden-workstation.sh integrity   # last: the AIDE baseline of everything above
-sudo harden-check --accept            # after a change you made or an OS update: shows
-                                      # every changed file, y = new baseline
+sudo harden-check --accept            # after a change you made or an OS update: counts per
+                                      # group, the unexplained changes page by page, the
+                                      # full numbered list in /tmp/from-admin for the daily
+                                      # user; its code typed here = new baseline
 ```
 
 ## Sections

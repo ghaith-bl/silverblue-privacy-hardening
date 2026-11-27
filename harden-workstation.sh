@@ -2356,7 +2356,8 @@ sec_kargs() {
 ## SELinux module harden_aide_efi (aide may stat the EFI partition's file system). The
 ## first run builds the database = the baseline. Every later change of a watched file,
 ## also one by this script, stays yellow in sectop until the admin accepts it:
-## sudo harden-check --accept (shows every change, y = new baseline). Never accepts by
+## sudo harden-check --accept (counts per group, the unexplained ones paged, the full
+## numbered list for the daily user, its code = new baseline). Never accepts by
 ## itself: a new aide.conf (other scope) is accepted the same way. Never fixes anything.
 ## Not CIS (step 8b2, 2026-11-23, asked by me; MITRE ATT&CK T1547.013 XDG autostart,
 ## T1543.002 systemd service, T1546.004 shell config): the daily user's start places, the
@@ -2571,7 +2572,7 @@ sec_integrity() {
     "$tool" --init || die "harden-check --init failed: no database"
     changed "$db built (baseline)"
   elif (( conf_changed )); then
-    warn "$conf changed: the database still has the old scope; sudo harden-check --accept shows what the new one adds, y takes it"
+    warn "$conf changed: the database still has the old scope; sudo harden-check --accept lists what the new one adds, its code takes it"
   fi
   enable_unit aidecheck.timer now || warn "start aidecheck.timer failed: no daily check"
   # one check now (not a change: reads only, writes the result for sectop)
