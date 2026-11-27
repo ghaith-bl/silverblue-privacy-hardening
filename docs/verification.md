@@ -43,19 +43,22 @@ is locked, so `NET_FLOWS_DIR=~/admin-inbox/net-flows` there (default `~/net-flow
 | hostfw mode | `sudo hostfw status` | `enforce` |
 | fixtures | `python3 -I -B -m unittest discover -s tests -p test_net_flows.py` (CI) | the evaluation, no scan |
 
-## IDS (2026-11-24, admin 74)
+## IDS (2026-11-24, admin 74; numbers 2026-11-25)
 
 | Check | Command | Expected |
 |-------|---------|----------|
 | package | `rpm -q suricata nmap` | versions (layered) |
 | service | `systemctl status suricata`; `journalctl -u suricata -b \| grep -i 'engine started'` | active; engine started |
 | watched | `sudo harden-ids status` | uplink + present VM bridges, never `wg0-mullvad`; capture sockets of user suricata on each; net.yaml up to date |
-| rules | same | ET Open N rules (date), local rules 9 |
+| rules | same | ET Open N rules (date), local rules 9 (host 2026-11-24: 69580 loaded, 27400 disabled by disable.conf, 26335 active) |
 | local rules | `tests/ids-rules.sh` (no root, no network) | every check PASS |
 | user | `ps -o user= -C Suricata-Main` | suricata |
-| sandbox | `systemd-analyze security suricata.service harden-ids-update.service` | exposure lower than Fedora's unit |
+| sandbox | `systemd-analyze security suricata.service harden-ids-update.service` | exposure lower than Fedora's unit (host: 4.6 / 1.7) |
 | SELinux | `sudo ausearch -m AVC -ts boot -c Suricata-Main`; same `-c suricata-update` | none |
-| RAM | `sudo harden-ids status` (memory now / peak) | numbers in the admin 74 result |
+| RAM | `sudo harden-ids status` (memory now / peak); `systemctl show -p MemoryCurrent suricata` | host: 230 MiB RSS, cgroup 285-296 MiB, stable; the weekly rules update peaks at 588 MiB (its own unit) |
+| CPU | `systemctl show -p CPUUsageNSec suricata` twice, a minute apart (no root) | host, steady state (30 min after start, Wi-Fi): 0.8 % of one core; start: rule compile, 11-15 s to engine started |
+| follows the network | `journalctl -t harden-ids-dispatcher` after a Wi-Fi change; `sudo harden-ids status` | net.yaml written + suricata restarted / started (host 2026-11-24: offline -> new LAN in 5 s); offline: stopped |
+| label | `ls -Z /etc/suricata/harden-ids/net.yaml`; `matchpathcon /etc/suricata/harden-ids/net.yaml` | the same (system_u:object_r:etc_t:s0): every writer restores the policy's label, so AIDE stays quiet on a new network |
 | privacy | `sudo grep -cE '"(payload\|packet\|http\|dns\|tls)":' /var/log/suricata/harden-ids/eve.json` | 0 |
 
 ## Integrity (2026-11-22)

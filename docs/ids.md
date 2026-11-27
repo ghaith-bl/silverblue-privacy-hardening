@@ -52,7 +52,7 @@ decide). sectop shows the alerts (ids box, critical ones in the alert bar).
 | Path | What |
 |------|------|
 | `/etc/suricata/harden-ids/suricata.yaml` | the config (Fedora's `/etc/suricata/suricata.yaml` unused) |
-| `/etc/suricata/harden-ids/net.yaml` | address groups + interfaces of the network now (`harden-ids sync`); AIDE: names only |
+| `/etc/suricata/harden-ids/net.yaml` | address groups + interfaces of the network now (`harden-ids sync`, then `restorecon -F`: the policy's label whoever wrote it); AIDE: names, mode, owner, label (no content) |
 | `/etc/suricata/harden-ids/local.rules`, `update.yaml`, `disable.conf`, `ids.conf`, `reference.config` | rules, suricata-update, kept categories, bridges, Fedora's reference list (root:suricata 0640) |
 | `/etc/systemd/system/suricata.service.d/harden-ids.conf` | our config, af-packet, `--user suricata`, sandbox; `ExecCondition`: net.yaml first, nothing to watch = not started |
 | `harden-ids-update.service` / `.timer` | ET Open weekly |
