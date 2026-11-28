@@ -246,6 +246,8 @@ else. Root stays locked.
   scap-security-guide (after an update, before a scan)
 - `tools/check-private-info.sh` - private data check of the tree / history before a push
 - `tools/kargs-bench.sh before|after` - same numbers before and after a kernel arg trial
+- `sudo tools/lan-scan.py` - the devices on this network (ARP, nmap), new / gone since the
+  last scan; own network or the owner's consent only; no MAC printed ([docs/lan-scan.md](docs/lan-scan.md))
 - `tools/lint.sh [<sectop repo>]` - the CI's lint checks before a push (ASCII, bash -n,
   shellcheck, private info); ShellCheck from a toolbox: `tools/lint.sh --setup` once
 
@@ -262,6 +264,7 @@ else. Root stays locked.
 - [docs/secure-boot.md](docs/secure-boot.md) - Secure Boot on, NVIDIA driver removed, revocation list (dbx)
 - [docs/mullvad.md](docs/mullvad.md) - Mullvad VPN setup
 - [docs/ids.md](docs/ids.md) - Suricata network IDS: what it sees, rules, logs, files
+- [docs/lan-scan.md](docs/lan-scan.md) - LAN device scan: consent, what is kept, privacy
 - [docs/lessons-learned.md](docs/lessons-learned.md) - findings worth remembering
 - [firewall/README.md](firewall/README.md) - hostfw egress filter: design, rules, tests
 - [firewall/docs/observe-log.md](firewall/docs/observe-log.md) - observe findings and changes
