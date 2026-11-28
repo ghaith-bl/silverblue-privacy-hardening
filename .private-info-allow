@@ -20,3 +20,5 @@ ipv4  *  192\.168\.12[23]\.1
 # host); made-up hosts inside libvirt's default network / browsevm's network in the ids tests
 ipv4  *  169\.254\.0\.0
 ipv4  tests/*ids*  192\.168\.12[23]\.\d{1,3}
+# made-up LAN of tests/test_lan_scan.py (tools/lan-scan.py)
+ipv4  tests/test_lan_scan.py  10\.9\.\d{1,3}\.\d{1,3}
